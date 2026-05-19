@@ -17,7 +17,7 @@ def save_session(
     summary: dict,
     audio_path: str | None = None,
     duration: float | None = None,
-) -> Path:
+) -> dict:
     _ensure_dir()
     ts = datetime.now()
     record = {
@@ -30,7 +30,8 @@ def save_session(
     }
     path = SESSIONS_DIR / f"{record['id']}.json"
     path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
-    return path
+    record["_path"] = str(path)
+    return record
 
 
 def list_sessions() -> list[dict]:

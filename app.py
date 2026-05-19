@@ -11,6 +11,7 @@ load_dotenv()
 
 from src.asr import merge_dialog, transcribe
 from src.call_recorder import CallRecorder, get_loopback_info
+from src.exporter import filename_for_session, session_to_markdown
 from src.recorder import Recorder, list_input_devices
 from src.storage import delete_session, list_sessions, save_session
 from src.summarizer import summarize, summarize_dialog
@@ -91,7 +92,7 @@ def process_audio(audio_path: Path):
     st.session_state["duration"] = transcript.duration
     st.session_state["dialog_summary"] = None
 
-    save_session(
+    st.session_state["last_session"] = save_session(
         transcript_text=transcript.text,
         summary=summary.to_dict(),
         audio_path=str(audio_path),
@@ -135,7 +136,7 @@ def process_call(system_path: Path, mic_path: Path, duration: float):
     st.session_state["duration"] = duration
     st.session_state["summary"] = None
 
-    save_session(
+    st.session_state["last_session"] = save_session(
         transcript_text=dialog_text,
         summary=summary.to_dict(),
         audio_path=f"{system_path.name} + {mic_path.name}",
@@ -250,7 +251,19 @@ def render_dialog_result():
     items = st.session_state["dialog_items"]
 
     st.divider()
-    st.subheader("📞 Результат звонка")
+    header_col, dl_col = st.columns([3, 1])
+    with header_col:
+        st.subheader("📞 Результат звонка")
+    with dl_col:
+        sess = st.session_state.get("last_session")
+        if sess:
+            st.download_button(
+                "⬇️ Markdown",
+                data=session_to_markdown(sess),
+                file_name=filename_for_session(sess),
+                mime="text/markdown",
+                use_container_width=True,
+            )
 
     emoji = SENTIMENT_EMOJI.get(summary.sentiment, "")
     st.info(f"**TL;DR** {emoji}\n\n{summary.tldr}")
@@ -298,7 +311,19 @@ def render_note_result():
     transcript = st.session_state["transcript"]
 
     st.divider()
-    st.subheader("📝 Результат")
+    header_col, dl_col = st.columns([3, 1])
+    with header_col:
+        st.subheader("📝 Результат")
+    with dl_col:
+        sess = st.session_state.get("last_session")
+        if sess:
+            st.download_button(
+                "⬇️ Markdown",
+                data=session_to_markdown(sess),
+                file_name=filename_for_session(sess),
+                mime="text/markdown",
+                use_container_width=True,
+            )
 
     emoji = SENTIMENT_EMOJI.get(summary.sentiment, "")
     st.info(f"**TL;DR** {emoji}\n\n{summary.tldr}")
@@ -361,9 +386,20 @@ def render_history_tab():
                     st.markdown(f"- {d}")
             with st.expander("Транскрипт"):
                 st.text(s.get("transcript", ""))
-            if st.button("🗑 Удалить", key=f"del_{s['id']}"):
-                delete_session(s["id"])
-                st.rerun()
+            col_dl, col_del = st.columns([1, 1])
+            with col_dl:
+                st.download_button(
+                    "⬇️ Markdown",
+                    data=session_to_markdown(s),
+                    file_name=filename_for_session(s),
+                    mime="text/markdown",
+                    key=f"dl_{s['id']}",
+                    use_container_width=True,
+                )
+            with col_del:
+                if st.button("🗑 Удалить", key=f"del_{s['id']}", use_container_width=True):
+                    delete_session(s["id"])
+                    st.rerun()
 
 
 def main():
