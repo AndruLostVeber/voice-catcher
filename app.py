@@ -268,6 +268,19 @@ def render_dialog_result():
     emoji = SENTIMENT_EMOJI.get(summary.sentiment, "")
     st.info(f"**TL;DR** {emoji}\n\n{summary.tldr}")
 
+    call_paths = st.session_state.get("call_paths")
+    if call_paths:
+        system_path, mic_path = call_paths
+        audio_cols = st.columns(2)
+        with audio_cols[0]:
+            st.caption("🟪 Собеседник (system)")
+            if Path(system_path).exists():
+                st.audio(str(system_path))
+        with audio_cols[1]:
+            st.caption("🟦 Я (микрофон)")
+            if Path(mic_path).exists():
+                st.audio(str(mic_path))
+
     cols = st.columns(2)
     with cols[0]:
         st.markdown("**🔑 Ключевые мысли**")
@@ -328,6 +341,11 @@ def render_note_result():
     emoji = SENTIMENT_EMOJI.get(summary.sentiment, "")
     st.info(f"**TL;DR** {emoji}\n\n{summary.tldr}")
 
+    sess = st.session_state.get("last_session") or {}
+    audio_path = sess.get("audio_path")
+    if audio_path and Path(audio_path).exists():
+        st.audio(audio_path)
+
     cols = st.columns(2)
     with cols[0]:
         st.markdown("**🔑 Ключевые мысли**")
@@ -369,6 +387,18 @@ def render_history_tab():
         summary = s.get("summary", {})
         with st.expander(f"📌 {s['created_at']} — {summary.get('tldr', '(без саммари)')[:80]}"):
             st.caption(f"ID: `{s['id']}` | Длительность: {s.get('duration', 0):.1f}с")
+
+            audio_path = s.get("audio_path", "") or ""
+            if " + " in audio_path:
+                parts = [p.strip() for p in audio_path.split(" + ")]
+                for label, fname in zip(("Собеседник", "Я"), parts):
+                    p = RECORDINGS_DIR / fname
+                    if p.exists():
+                        st.caption(label)
+                        st.audio(str(p))
+            elif audio_path and Path(audio_path).exists():
+                st.audio(audio_path)
+
             if summary.get("key_points"):
                 st.markdown("**Ключевые мысли:**")
                 for kp in summary["key_points"]:
