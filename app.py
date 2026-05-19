@@ -100,28 +100,74 @@ def process_audio(audio_path: Path):
     )
 
 
+MIN_WAV_BYTES = 1024  # меньше — это пустой header или почти тишина
+
+
+def _check_audio_file(path: Path, label: str) -> str | None:
+    if not path.exists():
+        return f"{label}: файл не создан"
+    size = path.stat().st_size
+    if size < MIN_WAV_BYTES:
+        return f"{label}: пустая запись ({size} байт)"
+    return None
+
+
 def process_call(system_path: Path, mic_path: Path, duration: float):
+    sys_err = _check_audio_file(system_path, "Системный звук")
+    mic_err = _check_audio_file(mic_path, "Микрофон")
+    if sys_err and mic_err:
+        st.error(
+            "Обе дорожки пустые. Возможные причины:\n\n"
+            f"- {sys_err}\n- {mic_err}\n\n"
+            "Проверь: (1) в Windows Sound Settings выбран правильный Default Output "
+            "и через него реально играет звук; (2) Default Input — нужный микрофон не замьючен; "
+            "(3) во время записи действительно был звук с обеих сторон."
+        )
+        return
+
     with st.status("Обрабатываю звонок...", expanded=True) as status:
         st.write("🎧 Распознаю реплики собеседника (system)...")
-        t0 = time.time()
-        sys_transcript = transcribe(
-            system_path,
-            model_name=st.session_state.get("whisper_model"),
-            language="ru",
-        )
-        st.write(f"  ✅ {time.time() - t0:.1f}с | {len(sys_transcript.text)} символов")
+        if sys_err:
+            st.write(f"  ⚠️ {sys_err}")
+            sys_transcript = None
+        else:
+            t0 = time.time()
+            sys_transcript = transcribe(
+                system_path,
+                model_name=st.session_state.get("whisper_model"),
+                language="ru",
+            )
+            st.write(f"  ✅ {time.time() - t0:.1f}с | {len(sys_transcript.text)} символов")
 
         st.write("🎙 Распознаю свои реплики (mic)...")
-        t0 = time.time()
-        mic_transcript = transcribe(
-            mic_path,
-            model_name=st.session_state.get("whisper_model"),
-            language="ru",
-        )
-        st.write(f"  ✅ {time.time() - t0:.1f}с | {len(mic_transcript.text)} символов")
+        if mic_err:
+            st.write(f"  ⚠️ {mic_err}")
+            mic_transcript = None
+        else:
+            t0 = time.time()
+            mic_transcript = transcribe(
+                mic_path,
+                model_name=st.session_state.get("whisper_model"),
+                language="ru",
+            )
+            st.write(f"  ✅ {time.time() - t0:.1f}с | {len(mic_transcript.text)} символов")
 
         st.write("🔀 Объединяю диалог по таймлайну...")
-        dialog_text, items = merge_dialog({"Я": mic_transcript, "Собеседник": sys_transcript})
+        sources: dict = {}
+        if mic_transcript and mic_transcript.text:
+            sources["Я"] = mic_transcript
+        if sys_transcript and sys_transcript.text:
+            sources["Собеседник"] = sys_transcript
+
+        if not sources:
+            status.update(label="Пустой диалог", state="error")
+            st.warning(
+                "Whisper не распознал речь ни в одной дорожке. Файлы существуют, но в них тишина "
+                "или неразборчивый звук. Проверь Default Output/Input в Windows."
+            )
+            return
+
+        dialog_text, items = merge_dialog(sources)
 
         st.write("🧠 Делаю саммари диалога...")
         t0 = time.time()
