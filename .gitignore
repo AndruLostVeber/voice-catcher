@@ -1,0 +1,12 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+data/sessions/*.json
+data/sessions/*.wav
+data/recordings/
+.streamlit/
+*.log
+.idea/
+.vscode/
