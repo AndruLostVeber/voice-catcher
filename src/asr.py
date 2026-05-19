@@ -56,3 +56,31 @@ def transcribe(
         segments=segments,
         duration=info.duration,
     )
+
+
+def merge_dialog(transcripts: dict[str, Transcript]) -> tuple[str, list[tuple[float, str, str]]]:
+    """Слить транскрипты нескольких ролей в хронологический диалог.
+
+    Возвращает (текст-диалог, список (start, role, text) для UI).
+    """
+    items: list[tuple[float, str, str]] = []
+    for role, t in transcripts.items():
+        for seg in t.segments:
+            if seg.text:
+                items.append((seg.start, role, seg.text))
+    items.sort(key=lambda x: x[0])
+
+    lines: list[str] = []
+    prev_role: str | None = None
+    buf: list[str] = []
+    for _, role, text in items:
+        if role != prev_role:
+            if buf:
+                lines.append(f"[{prev_role}] " + " ".join(buf))
+                buf = []
+            prev_role = role
+        buf.append(text)
+    if buf and prev_role is not None:
+        lines.append(f"[{prev_role}] " + " ".join(buf))
+
+    return "\n".join(lines), items
