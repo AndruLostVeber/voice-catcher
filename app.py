@@ -21,9 +21,24 @@ from src.summarizer import summarize, summarize_dialog
 
 RECORDINGS_DIR = Path(__file__).parent / "data" / "recordings"
 RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
+EXPORTS_DIR = Path(__file__).parent / "data" / "exports"
+EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 SENTIMENT_EMOJI = {"positive": "😊", "neutral": "😐", "negative": "😟"}
 ROLE_COLORS = {"Я": "🟦", "Собеседник": "🟪"}
+
+
+def _autosave_session(session: dict) -> Path | None:
+    if not session:
+        return None
+    try:
+        md = session_to_markdown(session)
+        out = EXPORTS_DIR / filename_for_session(session)
+        out.write_text(md, encoding="utf-8")
+        return out
+    except Exception as e:
+        st.warning(f"Не удалось автосохранить Markdown: {e}")
+        return None
 
 
 def init_state():
@@ -40,6 +55,7 @@ def init_state():
     st.session_state.setdefault("deep_analysis", None)
     st.session_state.setdefault("enable_deep_analysis", True)
     st.session_state.setdefault("enable_notifications", True)
+    st.session_state.setdefault("autosave_markdown", True)
     st.session_state.setdefault("duration", None)
 
 
@@ -85,6 +101,11 @@ def render_sidebar():
         value=st.session_state.get("enable_notifications", True),
         help="Звуковое и системное уведомление, когда обработка завершилась.",
     )
+    st.session_state["autosave_markdown"] = st.sidebar.toggle(
+        "💾 Автосохранение Markdown",
+        value=st.session_state.get("autosave_markdown", True),
+        help="После обработки автоматически сохранять .md в data/exports/.",
+    )
 
     devices = list_input_devices()
     if devices:
@@ -126,6 +147,10 @@ def process_audio(audio_path: Path):
         audio_path=str(audio_path),
         duration=transcript.duration,
     )
+    if st.session_state.get("autosave_markdown", True):
+        md_path = _autosave_session(st.session_state["last_session"])
+        if md_path:
+            st.session_state["last_session"]["_md_path"] = str(md_path)
     if st.session_state.get("enable_notifications", True):
         notify("Заметка готова", summary.tldr or "Транскрипт и саммари готовы")
 
@@ -236,6 +261,10 @@ def process_call(system_path: Path, mic_path: Path, duration: float):
         deep_analysis=deep.to_dict() if deep else None,
         kind="call",
     )
+    if st.session_state.get("autosave_markdown", True):
+        md_path = _autosave_session(st.session_state["last_session"])
+        if md_path:
+            st.session_state["last_session"]["_md_path"] = str(md_path)
     if st.session_state.get("enable_notifications", True):
         notify("Звонок проанализирован", summary.tldr or "Саммари и анализ готовы")
 

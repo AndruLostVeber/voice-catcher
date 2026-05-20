@@ -6,6 +6,7 @@ venv/
 data/sessions/*.json
 data/sessions/*.wav
 data/recordings/
+data/exports/
 .streamlit/
 *.log
 .idea/
