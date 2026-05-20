@@ -800,6 +800,88 @@ def render_history_tab():
     mcol3.metric("Заметок", n_notes)
     mcol4.metric("Общее время", f"{total_dur / 60:.0f} мин")
 
+    with st.expander("📈 Аналитика истории", expanded=len(sessions) >= 3):
+        df_h = pd.DataFrame(
+            [
+                {
+                    "date": (s.get("created_at") or "")[:10],
+                    "hour": int((s.get("created_at") or "T00")[11:13] or 0)
+                    if len(s.get("created_at") or "") >= 13
+                    else 0,
+                    "duration_min": float(s.get("duration") or 0) / 60,
+                    "kind": "Звонок" if s.get("kind") == "call" else "Заметка",
+                }
+                for s in sessions
+            ]
+        )
+        if not df_h.empty:
+            acols = st.columns(2)
+            with acols[0]:
+                df_daily = df_h.groupby(["date", "kind"], as_index=False)["duration_min"].sum()
+                bar_daily = (
+                    alt.Chart(df_daily)
+                    .mark_bar()
+                    .encode(
+                        x=alt.X("date:O", title="Дата"),
+                        y=alt.Y("duration_min:Q", title="Минут"),
+                        color=alt.Color(
+                            "kind:N",
+                            scale=alt.Scale(
+                                domain=["Звонок", "Заметка"],
+                                range=["#A78BFA", "#4C9AFF"],
+                            ),
+                            legend=alt.Legend(orient="top", title=None),
+                        ),
+                        tooltip=["date", "kind", "duration_min"],
+                    )
+                    .properties(height=220, title="Минут по дням")
+                )
+                st.altair_chart(bar_daily, use_container_width=True)
+            with acols[1]:
+                df_kind = df_h.groupby("kind", as_index=False).size()
+                pie_kind = (
+                    alt.Chart(df_kind)
+                    .mark_arc(innerRadius=45)
+                    .encode(
+                        theta="size:Q",
+                        color=alt.Color(
+                            "kind:N",
+                            scale=alt.Scale(
+                                domain=["Звонок", "Заметка"],
+                                range=["#A78BFA", "#4C9AFF"],
+                            ),
+                            legend=alt.Legend(orient="bottom", title=None),
+                        ),
+                        tooltip=["kind", "size"],
+                    )
+                    .properties(height=220, title="Тип сессии")
+                )
+                st.altair_chart(pie_kind, use_container_width=True)
+
+            df_hour = df_h.groupby("hour", as_index=False).size().rename(columns={"size": "count"})
+            hour_chart = (
+                alt.Chart(df_hour)
+                .mark_area(
+                    line={"color": "#4C9AFF"},
+                    color=alt.Gradient(
+                        gradient="linear",
+                        stops=[
+                            alt.GradientStop(color="#4C9AFF", offset=0),
+                            alt.GradientStop(color="#A78BFA", offset=1),
+                        ],
+                        x1=1, x2=1, y1=1, y2=0,
+                    ),
+                    opacity=0.5,
+                )
+                .encode(
+                    x=alt.X("hour:Q", title="Час суток", scale=alt.Scale(domain=[0, 23])),
+                    y=alt.Y("count:Q", title="Сессий"),
+                    tooltip=["hour", "count"],
+                )
+                .properties(height=160, title="Когда обычно записываешь")
+            )
+            st.altair_chart(hour_chart, use_container_width=True)
+
     fcol1, fcol2, fcol3 = st.columns([3, 1, 1])
     with fcol1:
         query = st.text_input(
