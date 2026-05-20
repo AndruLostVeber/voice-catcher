@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -47,16 +48,26 @@ def render_sidebar():
     )
     st.session_state["whisper_model"] = whisper_model
 
+    llm_options = {
+        "nvidia/llama-3.3-nemotron-super-49b-v1": "Nemotron Super 49B — баланс качества и скорости",
+        "meta/llama-3.3-70b-instruct": "Llama 3.3 70B — отличный русский",
+        "meta/llama-4-maverick-17b-128e-instruct": "Llama 4 Maverick — новейшая, MoE",
+        "mistralai/mixtral-8x22b-instruct-v0.1": "Mixtral 8x22B — мультиязычный MoE",
+        "openai/gpt-oss-120b": "GPT-OSS 120B — мощная для глубокого анализа",
+        "openai/gpt-oss-20b": "GPT-OSS 20B — быстрая",
+    }
+    default_llm = os.getenv("LLM_MODEL", "nvidia/llama-3.3-nemotron-super-49b-v1")
+    keys = list(llm_options.keys())
+    default_idx = keys.index(default_llm) if default_llm in keys else 0
     llm_model = st.sidebar.selectbox(
         "LLM для саммари",
-        options=[
-            "meta/llama-3.3-70b-instruct",
-            "nvidia/llama-3.1-nemotron-70b-instruct",
-            "qwen/qwen2.5-7b-instruct",
-        ],
-        index=0,
+        options=keys,
+        index=default_idx,
+        format_func=lambda k: llm_options[k].split(" — ")[0],
+        help="\n".join(f"**{k}** — {v}" for k, v in llm_options.items()),
     )
     st.session_state["llm_model"] = llm_model
+    st.sidebar.caption(llm_options[llm_model].split(" — ", 1)[-1])
 
     devices = list_input_devices()
     if devices:
