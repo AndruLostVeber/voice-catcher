@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from src.analyzer import compute_talk_stats, deep_analyze
 from src.asr import merge_dialog, transcribe
 from src.call_recorder import CallRecorder, get_loopback_info
 from src.exporter import filename_for_session, session_to_markdown
@@ -34,6 +35,9 @@ def init_state():
     st.session_state.setdefault("dialog_text", None)
     st.session_state.setdefault("dialog_items", None)
     st.session_state.setdefault("dialog_summary", None)
+    st.session_state.setdefault("talk_stats", None)
+    st.session_state.setdefault("deep_analysis", None)
+    st.session_state.setdefault("enable_deep_analysis", True)
     st.session_state.setdefault("duration", None)
 
 
@@ -68,6 +72,12 @@ def render_sidebar():
     )
     st.session_state["llm_model"] = llm_model
     st.sidebar.caption(llm_options[llm_model].split(" — ", 1)[-1])
+
+    st.session_state["enable_deep_analysis"] = st.sidebar.toggle(
+        "🔬 Глубокий анализ звонков",
+        value=st.session_state.get("enable_deep_analysis", True),
+        help="Второй LLM-вызов: стили общения, эмоции, цитаты, рекомендации. Тратит ещё один кредит.",
+    )
 
     devices = list_input_devices()
     if devices:
@@ -180,16 +190,31 @@ def process_call(system_path: Path, mic_path: Path, duration: float):
 
         dialog_text, items = merge_dialog(sources)
 
+        st.write("📊 Считаю статистику говорящих...")
+        talk_stats = compute_talk_stats(sources)
+
         st.write("🧠 Делаю саммари диалога...")
         t0 = time.time()
         summary = summarize_dialog(dialog_text, model=st.session_state.get("llm_model"))
-        st.write(f"✅ Готово за {time.time() - t0:.1f}с")
+        st.write(f"  ✅ {time.time() - t0:.1f}с")
+
+        deep = None
+        if st.session_state.get("enable_deep_analysis", True):
+            st.write("🔬 Глубокий анализ (стили, эмоции, рекомендации)...")
+            t0 = time.time()
+            try:
+                deep = deep_analyze(dialog_text, model=st.session_state.get("llm_model"))
+                st.write(f"  ✅ {time.time() - t0:.1f}с")
+            except Exception as e:
+                st.write(f"  ⚠️ глубокий анализ пропущен: {e}")
 
         status.update(label="Готово", state="complete")
 
     st.session_state["dialog_text"] = dialog_text
     st.session_state["dialog_items"] = items
     st.session_state["dialog_summary"] = summary
+    st.session_state["talk_stats"] = talk_stats
+    st.session_state["deep_analysis"] = deep
     st.session_state["duration"] = duration
     st.session_state["summary"] = None
 
@@ -198,6 +223,9 @@ def process_call(system_path: Path, mic_path: Path, duration: float):
         summary=summary.to_dict(),
         audio_path=f"{system_path.name} + {mic_path.name}",
         duration=duration,
+        talk_stats=talk_stats.to_dict() if talk_stats else None,
+        deep_analysis=deep.to_dict() if deep else None,
+        kind="call",
     )
 
 
@@ -366,6 +394,98 @@ def render_dialog_result():
 
     if summary.topics:
         st.markdown("**🏷 Темы:** " + " · ".join(f"`{t}`" for t in summary.topics))
+
+    talk_stats = st.session_state.get("talk_stats")
+    if talk_stats:
+        st.divider()
+        st.markdown("### 📊 Статистика разговора")
+        metric_cols = st.columns(4)
+        metric_cols[0].metric("⏱ Запись", f"{talk_stats.total_audio_seconds:.0f}с")
+        metric_cols[1].metric("🗣 Речь", f"{talk_stats.total_speech_seconds:.0f}с")
+        metric_cols[2].metric("🤫 Тишина", f"{talk_stats.silence_seconds:.0f}с")
+        metric_cols[3].metric("🌀 Перекрытие", f"{talk_stats.overlap_seconds:.0f}с")
+
+        sp_cols = st.columns(len(talk_stats.speakers) or 1)
+        for col, sp in zip(sp_cols, talk_stats.speakers):
+            badge = ROLE_COLORS.get(sp.role, "⬜")
+            with col:
+                st.markdown(f"**{badge} {sp.role}**")
+                st.markdown(
+                    f"- Слов: **{sp.word_count}**\n"
+                    f"- Время: **{sp.seconds:.1f}с** ({sp.share * 100:.0f}%)\n"
+                    f"- Темп: **{sp.words_per_minute:.0f}** слов/мин\n"
+                    f"- Реплик: {sp.segment_count}, средняя {sp.avg_segment_seconds:.1f}с"
+                )
+        if talk_stats.first_speaker:
+            st.caption(
+                f"Первым заговорил: **{talk_stats.first_speaker}** · "
+                f"Самая длинная пауза: {talk_stats.longest_pause_seconds:.1f}с"
+            )
+
+    deep = st.session_state.get("deep_analysis")
+    if deep:
+        st.divider()
+        st.markdown("### 🔬 Глубокий анализ")
+
+        meta_cols = st.columns(2)
+        with meta_cols[0]:
+            if deep.communication_quality:
+                st.markdown(f"**Качество коммуникации:** `{deep.communication_quality}`")
+        with meta_cols[1]:
+            if deep.power_balance:
+                st.markdown(f"**Баланс:** `{deep.power_balance}`")
+
+        if deep.speaker_styles:
+            style_cols = st.columns(len(deep.speaker_styles) or 1)
+            for col, (role, desc) in zip(style_cols, deep.speaker_styles.items()):
+                badge = ROLE_COLORS.get(role, "⬜")
+                with col:
+                    st.markdown(f"**🎭 Стиль {badge} {role}**")
+                    st.caption(desc)
+
+        if deep.interesting_quotes:
+            st.markdown("**💬 Интересные цитаты**")
+            for q in deep.interesting_quotes:
+                role = q.get("role", "?")
+                badge = ROLE_COLORS.get(role, "⬜")
+                quote = q.get("quote", "")
+                reason = q.get("reason", "")
+                st.markdown(f"> {badge} **{role}:** «{quote}»  \n*— {reason}*")
+
+        adv_cols = st.columns(2)
+        with adv_cols[0]:
+            if deep.next_steps:
+                st.markdown("**🎯 Следующие шаги**")
+                for s in deep.next_steps:
+                    st.markdown(f"- {s}")
+        with adv_cols[1]:
+            if deep.risks:
+                st.markdown("**⚡ Риски / недосказанности**")
+                for r in deep.risks:
+                    st.markdown(f"- {r}")
+
+        marker_cols = st.columns(2)
+        with marker_cols[0]:
+            if deep.conflict_markers:
+                st.markdown("**⚠️ Сигналы напряжения**")
+                for m in deep.conflict_markers:
+                    st.markdown(f"- *{m.get('trigger', '')}*  \n  > «{m.get('quote', '')}»")
+        with marker_cols[1]:
+            if deep.agreement_markers:
+                st.markdown("**✅ Сигналы согласия**")
+                for m in deep.agreement_markers:
+                    st.markdown(f"- *{m.get('about', '')}*  \n  > «{m.get('quote', '')}»")
+
+        if deep.emotion_timeline:
+            with st.expander("😊 Эмоциональный таймлайн"):
+                for e in deep.emotion_timeline:
+                    role = e.get("role", "?")
+                    badge = ROLE_COLORS.get(role, "⬜")
+                    bar = "█" * int(e.get("intensity", 1))
+                    st.markdown(
+                        f"`{e.get('time_marker', '')}` {badge} **{role}** — "
+                        f"{e.get('emotion', '')} {bar}"
+                    )
 
     with st.expander("💬 Диалог (по сегментам)"):
         for start, role, text in items or []:

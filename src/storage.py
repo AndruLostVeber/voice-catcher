@@ -17,6 +17,10 @@ def save_session(
     summary: dict,
     audio_path: str | None = None,
     duration: float | None = None,
+    talk_stats: dict | None = None,
+    deep_analysis: dict | None = None,
+    kind: str = "note",
+    extra: dict | None = None,
 ) -> dict:
     _ensure_dir()
     ts = datetime.now()
@@ -24,10 +28,15 @@ def save_session(
         "id": ts.strftime("%Y%m%d_%H%M%S"),
         "created_at": ts.isoformat(timespec="seconds"),
         "duration": duration,
+        "kind": kind,
         "audio_path": audio_path,
         "transcript": transcript_text,
         "summary": summary,
+        "talk_stats": talk_stats,
+        "deep_analysis": deep_analysis,
     }
+    if extra:
+        record["extra"] = extra
     path = SESSIONS_DIR / f"{record['id']}.json"
     path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
     record["_path"] = str(path)
