@@ -103,6 +103,23 @@ def render_sidebar():
     )
     st.session_state["whisper_model"] = whisper_model
 
+    lang_options = {
+        "ru": "🇷🇺 Русский",
+        "auto": "🌐 Авто (Whisper определит сам)",
+        "en": "🇬🇧 English",
+        "uk": "🇺🇦 Українська",
+        "de": "🇩🇪 Deutsch",
+        "es": "🇪🇸 Español",
+    }
+    lang = st.sidebar.selectbox(
+        "Язык распознавания",
+        options=list(lang_options.keys()),
+        index=0,
+        format_func=lambda k: lang_options[k],
+        help="Auto — Whisper сам определит, но иногда ошибается. Явный язык точнее.",
+    )
+    st.session_state["whisper_language"] = None if lang == "auto" else lang
+
     llm_options = {
         "nvidia/llama-3.3-nemotron-super-49b-v1": "Nemotron Super 49B — баланс качества и скорости",
         "meta/llama-3.3-70b-instruct": "Llama 3.3 70B — отличный русский",
@@ -158,7 +175,7 @@ def process_audio(audio_path: Path):
         transcript = transcribe(
             audio_path,
             model_name=st.session_state.get("whisper_model"),
-            language="ru",
+            language=st.session_state.get("whisper_language", "ru"),
         )
         st.write(f"✅ Распознано за {time.time() - t0:.1f}с | {len(transcript.text)} символов")
 
@@ -218,10 +235,12 @@ def process_call(system_path: Path, mic_path: Path, duration: float):
         t0 = time.time()
         whisper_model = st.session_state.get("whisper_model")
 
+        whisper_lang = st.session_state.get("whisper_language", "ru")
+
         def _safe_transcribe(path: Path, err: str | None):
             if err:
                 return None
-            return transcribe(path, model_name=whisper_model, language="ru")
+            return transcribe(path, model_name=whisper_model, language=whisper_lang)
 
         with ThreadPoolExecutor(max_workers=2) as ex:
             f_sys = ex.submit(_safe_transcribe, system_path, sys_err)
