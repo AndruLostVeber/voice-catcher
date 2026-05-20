@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -185,31 +186,30 @@ def process_call(system_path: Path, mic_path: Path, duration: float):
         return
 
     with st.status("Обрабатываю звонок...", expanded=True) as status:
-        st.write("🎧 Распознаю реплики собеседника (system)...")
-        if sys_err:
-            st.write(f"  ⚠️ {sys_err}")
-            sys_transcript = None
-        else:
-            t0 = time.time()
-            sys_transcript = transcribe(
-                system_path,
-                model_name=st.session_state.get("whisper_model"),
-                language="ru",
-            )
-            st.write(f"  ✅ {time.time() - t0:.1f}с | {len(sys_transcript.text)} символов")
+        st.write("🎧🎙 Распознаю обе дорожки параллельно...")
+        t0 = time.time()
+        whisper_model = st.session_state.get("whisper_model")
 
-        st.write("🎙 Распознаю свои реплики (mic)...")
+        def _safe_transcribe(path: Path, err: str | None):
+            if err:
+                return None
+            return transcribe(path, model_name=whisper_model, language="ru")
+
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            f_sys = ex.submit(_safe_transcribe, system_path, sys_err)
+            f_mic = ex.submit(_safe_transcribe, mic_path, mic_err)
+            sys_transcript = f_sys.result()
+            mic_transcript = f_mic.result()
+
+        sys_len = len(sys_transcript.text) if sys_transcript else 0
+        mic_len = len(mic_transcript.text) if mic_transcript else 0
+        st.write(
+            f"  ✅ {time.time() - t0:.1f}с | system: {sys_len} симв., mic: {mic_len} симв."
+        )
+        if sys_err:
+            st.write(f"  ⚠️ system: {sys_err}")
         if mic_err:
-            st.write(f"  ⚠️ {mic_err}")
-            mic_transcript = None
-        else:
-            t0 = time.time()
-            mic_transcript = transcribe(
-                mic_path,
-                model_name=st.session_state.get("whisper_model"),
-                language="ru",
-            )
-            st.write(f"  ✅ {time.time() - t0:.1f}с | {len(mic_transcript.text)} символов")
+            st.write(f"  ⚠️ mic: {mic_err}")
 
         st.write("🔀 Объединяю диалог по таймлайну...")
         sources: dict = {}
@@ -231,20 +231,29 @@ def process_call(system_path: Path, mic_path: Path, duration: float):
         st.write("📊 Считаю статистику говорящих...")
         talk_stats = compute_talk_stats(sources)
 
-        st.write("🧠 Делаю саммари диалога...")
+        do_deep = st.session_state.get("enable_deep_analysis", True)
+        if do_deep:
+            st.write("🧠 Саммари + 🔬 глубокий анализ параллельно...")
+        else:
+            st.write("🧠 Делаю саммари диалога...")
         t0 = time.time()
-        summary = summarize_dialog(dialog_text, model=st.session_state.get("llm_model"))
-        st.write(f"  ✅ {time.time() - t0:.1f}с")
-
         deep = None
-        if st.session_state.get("enable_deep_analysis", True):
-            st.write("🔬 Глубокий анализ (стили, эмоции, рекомендации)...")
-            t0 = time.time()
-            try:
-                deep = deep_analyze(dialog_text, model=st.session_state.get("llm_model"))
-                st.write(f"  ✅ {time.time() - t0:.1f}с")
-            except Exception as e:
-                st.write(f"  ⚠️ глубокий анализ пропущен: {e}")
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            f_summary = ex.submit(
+                summarize_dialog, dialog_text, st.session_state.get("llm_model")
+            )
+            f_deep = (
+                ex.submit(deep_analyze, dialog_text, st.session_state.get("llm_model"))
+                if do_deep
+                else None
+            )
+            summary = f_summary.result()
+            if f_deep is not None:
+                try:
+                    deep = f_deep.result()
+                except Exception as e:
+                    st.write(f"  ⚠️ глубокий анализ пропущен: {e}")
+        st.write(f"  ✅ {time.time() - t0:.1f}с")
 
         status.update(label="Готово", state="complete")
 
