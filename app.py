@@ -298,7 +298,13 @@ def render_record_tab():
     with col2:
         if st.session_state["is_recording"]:
             rec: Recorder = st.session_state["recorder"]
-            st.metric("⏱ Длительность", f"{rec.duration:.0f}с")
+            st.markdown(
+                f'<div style="display:flex;align-items:center;gap:8px;">'
+                f'<span class="vc-recording-dot"></span>'
+                f'<span style="font-size:1.1rem;font-weight:600;">Идёт запись · {rec.duration:.0f}с</span>'
+                f"</div>",
+                unsafe_allow_html=True,
+            )
             time.sleep(1)
             st.rerun()
         else:
@@ -351,7 +357,13 @@ def render_call_tab():
     with col2:
         if st.session_state["is_in_call"]:
             cr: CallRecorder = st.session_state["call_recorder"]
-            st.metric("🔴 В разговоре", f"{cr.duration:.0f}с")
+            st.markdown(
+                f'<div style="display:flex;align-items:center;gap:8px;">'
+                f'<span class="vc-recording-dot"></span>'
+                f'<span style="font-size:1.1rem;font-weight:600;">В разговоре · {cr.duration:.0f}с</span>'
+                f"</div>",
+                unsafe_allow_html=True,
+            )
             time.sleep(1)
             st.rerun()
         else:
