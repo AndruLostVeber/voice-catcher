@@ -3,6 +3,8 @@ from __future__ import annotations
 import io
 import json
 import os
+import subprocess
+import sys
 import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
@@ -39,6 +41,20 @@ EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
 SENTIMENT_EMOJI = {"positive": "😊", "neutral": "😐", "negative": "😟"}
 ROLE_COLORS = {"Я": "🟦", "Собеседник": "🟪"}
 ROLE_PALETTE = {"Я": "#4C9AFF", "Собеседник": "#A78BFA"}
+
+
+def _open_folder(path: Path) -> bool:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        if sys.platform == "win32":
+            os.startfile(str(path))  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(path)])
+        else:
+            subprocess.Popen(["xdg-open", str(path)])
+        return True
+    except Exception:
+        return False
 
 
 def _bulk_zip_bytes(sessions: list[dict]) -> bytes:
@@ -851,6 +867,12 @@ def render_history_tab():
             use_container_width=True,
             help="Markdown и JSON всех сессий в одном архиве",
         )
+        if st.button(
+            "📂 Открыть папку экспортов",
+            use_container_width=True,
+            help="Папка data/exports с .md файлами всех сессий",
+        ):
+            _open_folder(EXPORTS_DIR)
 
     with st.expander("📈 Аналитика истории", expanded=len(sessions) >= 3):
         df_h = pd.DataFrame(
