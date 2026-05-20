@@ -29,7 +29,7 @@ from src.call_recorder import (
 from src.exporter import filename_for_session, session_to_markdown
 from src.notify import notify
 from src.recorder import Recorder, list_input_devices
-from src.storage import delete_session, list_sessions, save_session
+from src.storage import delete_session, list_sessions, load_session, save_session
 from src.summarizer import summarize, summarize_dialog
 from src.theme import inject as inject_css
 
@@ -41,6 +41,107 @@ EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
 SENTIMENT_EMOJI = {"positive": "😊", "neutral": "😐", "negative": "😟"}
 ROLE_COLORS = {"Я": "🟦", "Собеседник": "🟪"}
 ROLE_PALETTE = {"Я": "#4C9AFF", "Собеседник": "#A78BFA"}
+
+
+def format_duration(seconds: float | int | None) -> str:
+    s = int(seconds or 0)
+    if s < 60:
+        return f"{s}с"
+    m, sec = divmod(s, 60)
+    if m < 60:
+        return f"{m}:{sec:02d}"
+    h, m = divmod(m, 60)
+    return f"{h}:{m:02d}:{sec:02d}"
+
+
+def _load_session_into_state(session_id: str) -> bool:
+    sess = load_session(session_id)
+    if not sess:
+        return False
+    from src.analyzer import DeepAnalysis, SpeakerStats, TalkStats
+    from src.summarizer import DialogSummary, Summary
+
+    st.session_state["last_session"] = sess
+    st.session_state["duration"] = sess.get("duration")
+    st.session_state["call_paths"] = None
+
+    audio_path = sess.get("audio_path") or ""
+    if sess.get("kind") == "call" and " + " in audio_path:
+        parts = [p.strip() for p in audio_path.split(" + ")]
+        if len(parts) == 2:
+            st.session_state["call_paths"] = (
+                str(RECORDINGS_DIR / parts[0]),
+                str(RECORDINGS_DIR / parts[1]),
+            )
+
+    summary_dict = sess.get("summary", {}) or {}
+    if sess.get("kind") == "call":
+        st.session_state["summary"] = None
+        st.session_state["transcript"] = None
+        st.session_state["dialog_text"] = sess.get("transcript", "")
+        st.session_state["dialog_items"] = None
+        st.session_state["dialog_summary"] = DialogSummary(
+            tldr=summary_dict.get("tldr", ""),
+            key_points=summary_dict.get("key_points", []),
+            action_items=summary_dict.get("action_items", []),
+            decisions=summary_dict.get("decisions", []),
+            open_questions=summary_dict.get("open_questions", []),
+            topics=summary_dict.get("topics", []),
+            sentiment=summary_dict.get("sentiment", "neutral"),
+            language=summary_dict.get("language", "ru"),
+            raw="",
+        )
+        ts = sess.get("talk_stats") or {}
+        if ts:
+            st.session_state["talk_stats"] = TalkStats(
+                speakers=[SpeakerStats(**sp) for sp in ts.get("speakers", [])],
+                total_audio_seconds=ts.get("total_audio_seconds", 0.0),
+                total_speech_seconds=ts.get("total_speech_seconds", 0.0),
+                silence_seconds=ts.get("silence_seconds", 0.0),
+                overlap_seconds=ts.get("overlap_seconds", 0.0),
+                first_speaker=ts.get("first_speaker"),
+                longest_pause_seconds=ts.get("longest_pause_seconds", 0.0),
+            )
+        else:
+            st.session_state["talk_stats"] = None
+        deep = sess.get("deep_analysis") or {}
+        if deep:
+            st.session_state["deep_analysis"] = DeepAnalysis(
+                speaker_styles=deep.get("speaker_styles", {}),
+                emotion_timeline=deep.get("emotion_timeline", []),
+                conflict_markers=deep.get("conflict_markers", []),
+                agreement_markers=deep.get("agreement_markers", []),
+                communication_quality=deep.get("communication_quality", ""),
+                power_balance=deep.get("power_balance", ""),
+                next_steps=deep.get("next_steps", []),
+                interesting_quotes=deep.get("interesting_quotes", []),
+                risks=deep.get("risks", []),
+                raw="",
+            )
+        else:
+            st.session_state["deep_analysis"] = None
+    else:
+        st.session_state["dialog_summary"] = None
+        st.session_state["talk_stats"] = None
+        st.session_state["deep_analysis"] = None
+        st.session_state["summary"] = Summary(
+            tldr=summary_dict.get("tldr", ""),
+            key_points=summary_dict.get("key_points", []),
+            action_items=summary_dict.get("action_items", []),
+            topics=summary_dict.get("topics", []),
+            sentiment=summary_dict.get("sentiment", "neutral"),
+            language=summary_dict.get("language", "ru"),
+            raw="",
+        )
+        from src.asr import Transcript
+
+        st.session_state["transcript"] = Transcript(
+            text=sess.get("transcript", ""),
+            language=summary_dict.get("language", "ru"),
+            segments=[],
+            duration=float(sess.get("duration") or 0),
+        )
+    return True
 
 
 def _open_folder(path: Path) -> bool:
@@ -1071,8 +1172,13 @@ def render_history_tab():
                     st.markdown(f"- {d}")
             with st.expander("Транскрипт"):
                 st.text(s.get("transcript", ""))
-            col_dl, col_del = st.columns([1, 1])
-            with col_dl:
+            btn_cols = st.columns([1, 1, 1])
+            with btn_cols[0]:
+                if st.button("🔄 Открыть", key=f"open_{s['id']}", use_container_width=True):
+                    if _load_session_into_state(s["id"]):
+                        st.toast(f"Сессия {s['id']} загружена", icon="✅")
+                        st.rerun()
+            with btn_cols[1]:
                 st.download_button(
                     "⬇️ Markdown",
                     data=session_to_markdown(s),
@@ -1081,7 +1187,7 @@ def render_history_tab():
                     key=f"dl_{s['id']}",
                     use_container_width=True,
                 )
-            with col_del:
+            with btn_cols[2]:
                 if st.button("🗑 Удалить", key=f"del_{s['id']}", use_container_width=True):
                     delete_session(s["id"])
                     st.rerun()

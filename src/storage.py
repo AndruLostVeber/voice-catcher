@@ -58,7 +58,9 @@ def load_session(session_id: str) -> dict | None:
     path = SESSIONS_DIR / f"{session_id}.json"
     if not path.exists():
         return None
-    return json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["_path"] = str(path)
+    return data
 
 
 def delete_session(session_id: str) -> bool:
