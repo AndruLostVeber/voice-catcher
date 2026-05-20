@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import io
+import json
 import os
 import time
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -36,6 +39,26 @@ EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
 SENTIMENT_EMOJI = {"positive": "😊", "neutral": "😐", "negative": "😟"}
 ROLE_COLORS = {"Я": "🟦", "Собеседник": "🟪"}
 ROLE_PALETTE = {"Я": "#4C9AFF", "Собеседник": "#A78BFA"}
+
+
+def _bulk_zip_bytes(sessions: list[dict]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for s in sessions:
+            try:
+                md = session_to_markdown(s)
+                zf.writestr(filename_for_session(s), md)
+            except Exception:
+                pass
+            try:
+                payload = {k: v for k, v in s.items() if not k.startswith("_")}
+                zf.writestr(
+                    f"json/{s.get('id', 'session')}.json",
+                    json.dumps(payload, ensure_ascii=False, indent=2),
+                )
+            except Exception:
+                pass
+    return buf.getvalue()
 
 
 def _autosave_session(session: dict) -> Path | None:
@@ -794,11 +817,21 @@ def render_history_tab():
     n_calls = sum(1 for k in kinds if k == "call")
     n_notes = len(sessions) - n_calls
 
-    mcol1, mcol2, mcol3, mcol4 = st.columns(4)
+    mcol1, mcol2, mcol3, mcol4, mcol5 = st.columns([1, 1, 1, 1, 1.4])
     mcol1.metric("Всего сессий", len(sessions))
     mcol2.metric("Звонков", n_calls)
     mcol3.metric("Заметок", n_notes)
     mcol4.metric("Общее время", f"{total_dur / 60:.0f} мин")
+    with mcol5:
+        st.write("")
+        st.download_button(
+            "📦 Скачать всё (ZIP)",
+            data=_bulk_zip_bytes(sessions),
+            file_name=f"voice-notes_history_{datetime.now().strftime('%Y%m%d')}.zip",
+            mime="application/zip",
+            use_container_width=True,
+            help="Markdown и JSON всех сессий в одном архиве",
+        )
 
     with st.expander("📈 Аналитика истории", expanded=len(sessions) >= 3):
         df_h = pd.DataFrame(
