@@ -20,6 +20,7 @@ from src.notify import notify
 from src.recorder import Recorder, list_input_devices
 from src.storage import delete_session, list_sessions, save_session
 from src.summarizer import summarize, summarize_dialog
+from src.theme import inject as inject_css
 
 RECORDINGS_DIR = Path(__file__).parent / "data" / "recordings"
 RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -830,11 +831,30 @@ def render_history_tab():
 
 
 def main():
-    st.set_page_config(page_title="Voice Notes AI", page_icon="🎙", layout="wide")
+    st.set_page_config(
+        page_title="Voice Notes AI",
+        page_icon="🎙",
+        layout="wide",
+        initial_sidebar_state="expanded",
+        menu_items={
+            "Get Help": "https://github.com/AndruLostVeber/voice-catcher",
+            "Report a bug": "https://github.com/AndruLostVeber/voice-catcher/issues",
+            "About": (
+                "**Voice Notes AI** — голосовые заметки и анализ звонков.\n\n"
+                "Whisper + NVIDIA NIM (Llama / Nemotron / Mixtral / GPT-OSS).\n\n"
+                "GitHub: AndruLostVeber/voice-catcher"
+            ),
+        },
+    )
+    inject_css(st)
     init_state()
 
-    st.title("🎙 Voice Notes AI")
-    st.caption("Заметки и звонки → транскрипт (Whisper) → саммари (NVIDIA LLM)")
+    title_col, badge_col = st.columns([5, 1])
+    with title_col:
+        st.title("🎙 Voice Notes AI")
+        st.caption("Заметки и звонки → транскрипт (Whisper) → саммари и глубокий анализ (NVIDIA LLM)")
+    with badge_col:
+        st.markdown("")  # пустота — позже сюда счётчик/статус
 
     render_sidebar()
 
