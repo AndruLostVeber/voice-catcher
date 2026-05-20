@@ -844,7 +844,48 @@ def render_history_tab():
     st.subheader("🗂 История сессий")
     sessions = list_sessions()
     if not sessions:
-        st.caption("Пока пусто. Запиши или загрузи что-нибудь.")
+        st.markdown("### 👋 Здесь пока пусто")
+        st.caption("Начни с одного из сценариев — результат появится в этой вкладке.")
+        cards = st.columns(3)
+        with cards[0]:
+            st.markdown(
+                """
+                <div style="background:#161A22;padding:18px;border-radius:14px;border:1px solid #232a36;height:100%;">
+                <h4 style="margin:0 0 6px;">🎙 Голосовая заметка</h4>
+                <p style="color:#9CA3AF;font-size:0.9rem;margin:0;">
+                Вкладка <b>«Заметка»</b> → нажми ● Начать запись → говори → ■ Остановить.
+                Получишь TL;DR, ключевые мысли и задачи.
+                </p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with cards[1]:
+            st.markdown(
+                """
+                <div style="background:#161A22;padding:18px;border-radius:14px;border:1px solid #232a36;height:100%;">
+                <h4 style="margin:0 0 6px;">📞 Запись звонка</h4>
+                <p style="color:#9CA3AF;font-size:0.9rem;margin:0;">
+                Вкладка <b>«Звонок»</b> → выбери Default Output (наушники) → запусти разговор в MAX/Zoom/...
+                Получишь диалог Я/Собеседник + глубокий анализ.
+                </p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with cards[2]:
+            st.markdown(
+                """
+                <div style="background:#161A22;padding:18px;border-radius:14px;border:1px solid #232a36;height:100%;">
+                <h4 style="margin:0 0 6px;">📁 Загрузка файла</h4>
+                <p style="color:#9CA3AF;font-size:0.9rem;margin:0;">
+                Вкладка <b>«Загрузка»</b> → закинь wav/mp3/m4a → «Обработать».
+                Подходит для записей, сделанных вне приложения.
+                </p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
         return
 
     total_dur = sum(float(s.get("duration") or 0) for s in sessions)
