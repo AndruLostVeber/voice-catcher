@@ -5,6 +5,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import altair as alt
+import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -26,6 +28,7 @@ EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 SENTIMENT_EMOJI = {"positive": "😊", "neutral": "😐", "negative": "😟"}
 ROLE_COLORS = {"Я": "🟦", "Собеседник": "🟪"}
+ROLE_PALETTE = {"Я": "#4C9AFF", "Собеседник": "#A78BFA"}
 
 
 def _autosave_session(session: dict) -> Path | None:
@@ -445,6 +448,67 @@ def render_dialog_result():
         metric_cols[2].metric("🤫 Тишина", f"{talk_stats.silence_seconds:.0f}с")
         metric_cols[3].metric("🌀 Перекрытие", f"{talk_stats.overlap_seconds:.0f}с")
 
+        chart_cols = st.columns([1, 1])
+        with chart_cols[0]:
+            df_time = pd.DataFrame(
+                [{"Кто": sp.role, "секунды": sp.seconds} for sp in talk_stats.speakers]
+            )
+            if not df_time.empty:
+                pie = (
+                    alt.Chart(df_time)
+                    .mark_arc(innerRadius=45)
+                    .encode(
+                        theta=alt.Theta("секунды:Q"),
+                        color=alt.Color(
+                            "Кто:N",
+                            scale=alt.Scale(
+                                domain=list(ROLE_PALETTE.keys()),
+                                range=list(ROLE_PALETTE.values()),
+                            ),
+                            legend=alt.Legend(orient="bottom"),
+                        ),
+                        tooltip=["Кто", "секунды"],
+                    )
+                    .properties(height=180, title="Время речи")
+                )
+                st.altair_chart(pie, use_container_width=True)
+        with chart_cols[1]:
+            df_words = pd.DataFrame(
+                [
+                    {"Кто": sp.role, "Метрика": "Слова", "Значение": sp.word_count}
+                    for sp in talk_stats.speakers
+                ]
+                + [
+                    {
+                        "Кто": sp.role,
+                        "Метрика": "Темп (WPM)",
+                        "Значение": round(sp.words_per_minute),
+                    }
+                    for sp in talk_stats.speakers
+                ]
+            )
+            if not df_words.empty:
+                bars = (
+                    alt.Chart(df_words)
+                    .mark_bar()
+                    .encode(
+                        x=alt.X("Кто:N", title=None),
+                        y=alt.Y("Значение:Q"),
+                        color=alt.Color(
+                            "Кто:N",
+                            scale=alt.Scale(
+                                domain=list(ROLE_PALETTE.keys()),
+                                range=list(ROLE_PALETTE.values()),
+                            ),
+                            legend=None,
+                        ),
+                        column=alt.Column("Метрика:N", header=alt.Header(title=None)),
+                        tooltip=["Кто", "Метрика", "Значение"],
+                    )
+                    .properties(height=180)
+                )
+                st.altair_chart(bars, use_container_width=False)
+
         sp_cols = st.columns(len(talk_stats.speakers) or 1)
         for col, sp in zip(sp_cols, talk_stats.speakers):
             badge = ROLE_COLORS.get(sp.role, "⬜")
@@ -517,11 +581,54 @@ def render_dialog_result():
                     st.markdown(f"- *{m.get('about', '')}*  \n  > «{m.get('quote', '')}»")
 
         if deep.emotion_timeline:
-            with st.expander("😊 Эмоциональный таймлайн"):
+            st.markdown("**😊 Эмоциональный таймлайн**")
+            time_order = {"начало": 0, "середина": 1, "конец": 2}
+            df_em = pd.DataFrame(
+                [
+                    {
+                        "phase": e.get("time_marker", ""),
+                        "phase_order": time_order.get(e.get("time_marker", ""), 99),
+                        "role": e.get("role", "?"),
+                        "intensity": int(e.get("intensity", 1) or 1),
+                        "emotion": e.get("emotion", ""),
+                    }
+                    for e in deep.emotion_timeline
+                    if e.get("role") in ROLE_PALETTE
+                ]
+            )
+            if not df_em.empty:
+                line = (
+                    alt.Chart(df_em)
+                    .mark_line(point=alt.OverlayMarkDef(size=120, filled=True))
+                    .encode(
+                        x=alt.X(
+                            "phase:N",
+                            sort=["начало", "середина", "конец"],
+                            title="Фаза разговора",
+                        ),
+                        y=alt.Y(
+                            "intensity:Q",
+                            title="Интенсивность",
+                            scale=alt.Scale(domain=[0, 5]),
+                        ),
+                        color=alt.Color(
+                            "role:N",
+                            scale=alt.Scale(
+                                domain=list(ROLE_PALETTE.keys()),
+                                range=list(ROLE_PALETTE.values()),
+                            ),
+                            legend=alt.Legend(orient="top", title=None),
+                        ),
+                        tooltip=["role", "phase", "emotion", "intensity"],
+                    )
+                    .properties(height=220)
+                )
+                st.altair_chart(line, use_container_width=True)
+            with st.expander("Детали"):
                 for e in deep.emotion_timeline:
                     role = e.get("role", "?")
                     badge = ROLE_COLORS.get(role, "⬜")
-                    bar = "█" * int(e.get("intensity", 1))
+                    bar = "█" * int(e.get("intensity", 1) or 1)
                     st.markdown(
                         f"`{e.get('time_marker', '')}` {badge} **{role}** — "
                         f"{e.get('emotion', '')} {bar}"
