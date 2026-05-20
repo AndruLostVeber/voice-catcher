@@ -125,16 +125,31 @@ def summarize(transcript: str, model: str | None = None) -> Summary:
     )
 
 
-def summarize_dialog(dialog: str, model: str | None = None) -> DialogSummary:
+def _participants_intro(participants: list[str] | None) -> str:
+    if not participants or len(participants) <= 2:
+        return ""
+    names = ", ".join(f'"{p}"' for p in participants)
+    return (
+        f"\n\nВ этом разговоре {len(participants)} участника: {names}. "
+        f"В action_items.who используй ИМЯ участника как оно указано в транскрипте."
+    )
+
+
+def summarize_dialog(
+    dialog: str,
+    model: str | None = None,
+    participants: list[str] | None = None,
+) -> DialogSummary:
     if not dialog.strip():
         raise ValueError("empty dialog")
 
     model_name = model or os.getenv("LLM_MODEL", "meta/llama-3.3-70b-instruct")
+    system_prompt = DIALOG_SYSTEM_PROMPT + _participants_intro(participants)
     completion = _client().chat.completions.create(
         model=model_name,
         messages=[
-            {"role": "system", "content": DIALOG_SYSTEM_PROMPT},
-            {"role": "user", "content": f"Транскрипт звонка:\n\n{dialog}"},
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Транскрипт разговора:\n\n{dialog}"},
         ],
         temperature=0.2,
         top_p=0.9,

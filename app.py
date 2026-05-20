@@ -26,6 +26,7 @@ from src.call_recorder import (
     list_loopback_devices,
     list_microphones,
 )
+from src.discord_recorder import DiscordBot
 from src.embeddings import cosine_similarity, embed, session_text_for_embedding
 from src.exporter import filename_for_session, session_to_markdown
 from src.notify import notify
@@ -257,6 +258,7 @@ def init_state():
     st.session_state.setdefault("enable_notifications", True)
     st.session_state.setdefault("autosave_markdown", True)
     st.session_state.setdefault("duration", None)
+    st.session_state.setdefault("discord_channel_id", None)
 
 
 def render_sidebar():
@@ -626,6 +628,260 @@ def render_call_tab():
             st.rerun()
         else:
             st.metric("⏱ Готов", "—")
+
+
+def process_discord(files: dict[str, Path], duration: float, channel_label: str):
+    if not files:
+        st.error("Discord не вернул аудиофайлов. Возможно, никто не говорил.")
+        return
+
+    with st.status("Обрабатываю запись Discord...", expanded=True) as status:
+        st.write(f"🎮 Канал: **{channel_label}** · участников с речью: **{len(files)}**")
+        st.write("🎧 Транскрибирую каждого говорящего параллельно...")
+        t0 = time.time()
+        whisper_model = st.session_state.get("whisper_model")
+        whisper_lang = st.session_state.get("whisper_language", "ru")
+
+        def _do(name_path):
+            name, path = name_path
+            try:
+                t = transcribe(path, model_name=whisper_model, language=whisper_lang)
+                return name, t
+            except Exception as e:
+                st.write(f"  ⚠️ {name}: {e}")
+                return name, None
+
+        results: dict[str, "object"] = {}
+        with ThreadPoolExecutor(max_workers=min(4, len(files))) as ex:
+            for name, t in ex.map(_do, files.items()):
+                if t is not None and t.text:
+                    results[name] = t
+        st.write(f"  ✅ {time.time() - t0:.1f}с · распознано: {len(results)}/{len(files)}")
+
+        if not results:
+            status.update(label="Пустой диалог", state="error")
+            st.warning("Whisper не нашёл речи ни в одном треке.")
+            return
+
+        st.write("🔀 Объединяю диалог по таймлайну...")
+        dialog_text, items = merge_dialog(results)
+        talk_stats = compute_talk_stats(results)
+
+        participants = list(results.keys())
+        do_deep = st.session_state.get("enable_deep_analysis", True)
+        if do_deep:
+            st.write("🧠 Саммари + 🔬 глубокий анализ параллельно...")
+        else:
+            st.write("🧠 Делаю саммари...")
+        t0 = time.time()
+        deep = None
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            f_sum = ex.submit(
+                summarize_dialog,
+                dialog_text,
+                st.session_state.get("llm_model"),
+                participants,
+            )
+            f_deep = (
+                ex.submit(
+                    deep_analyze,
+                    dialog_text,
+                    st.session_state.get("llm_model"),
+                    participants,
+                )
+                if do_deep
+                else None
+            )
+            summary = f_sum.result()
+            if f_deep is not None:
+                try:
+                    deep = f_deep.result()
+                except Exception as e:
+                    st.write(f"  ⚠️ глубокий анализ: {e}")
+        st.write(f"  ✅ {time.time() - t0:.1f}с")
+
+        status.update(label="Готово", state="complete")
+
+    st.session_state["dialog_text"] = dialog_text
+    st.session_state["dialog_items"] = items
+    st.session_state["dialog_summary"] = summary
+    st.session_state["talk_stats"] = talk_stats
+    st.session_state["deep_analysis"] = deep
+    st.session_state["duration"] = duration
+    st.session_state["summary"] = None
+    st.session_state["call_paths"] = None
+
+    audio_label = " + ".join(p.name for p in files.values())
+    st.session_state["last_session"] = save_session(
+        transcript_text=dialog_text,
+        summary=summary.to_dict(),
+        audio_path=audio_label,
+        duration=duration,
+        talk_stats=talk_stats.to_dict() if talk_stats else None,
+        deep_analysis=deep.to_dict() if deep else None,
+        kind="discord",
+        extra={"channel": channel_label, "participants": participants},
+    )
+    if st.session_state.get("autosave_markdown", True):
+        md = _autosave_session(st.session_state["last_session"])
+        if md:
+            st.session_state["last_session"]["_md_path"] = str(md)
+    if st.session_state.get("enable_notifications", True):
+        notify("Discord звонок проанализирован", summary.tldr or "Готово")
+
+
+def render_discord_tab():
+    st.subheader("🎮 Discord — запись голосового канала")
+    st.caption(
+        "Бот заходит в голосовой канал и пишет каждого говорящего отдельно. "
+        "Получаем настоящую диаризацию по людям, а не по дорожкам."
+    )
+
+    bot = DiscordBot.get()
+    status = bot.status
+
+    if not bot.is_connected and not bot.is_recording:
+        with st.container():
+            st.markdown(
+                """
+                <div style="background:#161A22;padding:14px;border-radius:12px;border:1px solid #232a36;margin-bottom:12px;">
+                <b>Как подключить:</b><br/>
+                1. <a href="https://discord.com/developers/applications" target="_blank" style="color:#4C9AFF;">Создай Application</a> → Bot → Reset Token<br/>
+                2. Включи <b>Privileged Intents</b>: <code>SERVER MEMBERS</code> и <code>VOICE STATE</code><br/>
+                3. OAuth2 → URL Generator → scope <code>bot</code> + permissions <code>Connect, Speak, View Channels</code><br/>
+                4. Открой ссылку и добавь бота на свой сервер<br/>
+                5. Вставь токен в <code>.env</code> (<code>DISCORD_BOT_TOKEN=...</code>) или в поле ниже
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        token_default = os.getenv("DISCORD_BOT_TOKEN", "")
+        token = st.text_input(
+            "Discord Bot Token",
+            value=token_default,
+            type="password",
+            help="Хранится только в текущем сеансе Streamlit, никуда не отправляется.",
+        )
+        if st.button("🔌 Подключить бота", type="primary", disabled=not token):
+            with st.spinner("Подключаюсь к Discord..."):
+                try:
+                    bot.start(token)
+                except Exception as e:
+                    st.error(f"Не удалось подключиться: {e}")
+                    return
+            if bot.is_connected:
+                st.toast("Бот подключён", icon="✅")
+                st.rerun()
+            else:
+                st.error(f"Не удалось подключиться (status: {bot.status})")
+        if status.startswith("error:"):
+            st.error(status)
+        return
+
+    # Connected — show channels and recording controls
+    info_col, btn_col = st.columns([3, 1])
+    with info_col:
+        guilds = len(bot._bot.guilds) if bot._bot else 0  # type: ignore[attr-defined]
+        chans = bot.voice_channels()
+        st.markdown(
+            f"✅ **Подключён** · серверов: {guilds} · голосовых каналов: {len(chans)}"
+        )
+    with btn_col:
+        if st.button("🔌 Отключить", use_container_width=True):
+            bot.stop()
+            st.toast("Бот отключён", icon="✅")
+            st.rerun()
+
+    if bot.is_recording:
+        col_status, col_stop = st.columns([2, 1])
+        with col_status:
+            st.markdown(
+                f'<div style="display:flex;align-items:center;gap:10px;background:#161A22;'
+                f'padding:14px 16px;border-radius:12px;border:1px solid #232a36;">'
+                f'<span class="vc-recording-dot"></span>'
+                f'<span style="font-size:1.05rem;font-weight:600;">Записываю канал · '
+                f"{format_duration(bot.current_record_duration)}</span></div>",
+                unsafe_allow_html=True,
+            )
+        with col_stop:
+            if st.button("■ Завершить и обработать", type="primary", use_container_width=True):
+                with st.spinner("Сохраняю аудио и отключаюсь..."):
+                    rec = bot.stop_and_collect(timeout=30)
+                if not rec:
+                    st.error("Запись не вернула данных.")
+                else:
+                    out_dir = RECORDINGS_DIR
+                    moved: dict[str, Path] = {}
+                    for name, src_path in rec.files.items():
+                        try:
+                            dest = out_dir / src_path.name
+                            if src_path.resolve() != dest.resolve():
+                                src_path.replace(dest)
+                            moved[name] = dest
+                        except Exception:
+                            moved[name] = src_path
+                    label = f"{rec.guild} / {rec.channel}"
+                    st.success(f"Запись завершена · {format_duration(rec.duration)} · {len(moved)} участника(ов)")
+                    process_discord(moved, rec.duration, label)
+                    st.rerun()
+        time.sleep(1)
+        st.rerun()
+        return
+
+    refresh_col, _ = st.columns([1, 3])
+    with refresh_col:
+        if st.button("🔄 Обновить список каналов", use_container_width=True):
+            st.rerun()
+
+    chans = bot.voice_channels()
+    if not chans:
+        st.warning(
+            "Не вижу голосовых каналов. Убедись что бот добавлен на сервер "
+            "и у него есть права просматривать voice channels."
+        )
+        return
+
+    options = list(range(len(chans)))
+
+    def _fmt(i: int) -> str:
+        c = chans[i]
+        members = f" · 👥 {', '.join(c.members[:3])}" if c.members else ""
+        more = f" +{len(c.members) - 3}" if len(c.members) > 3 else ""
+        return f"{c.guild_name} → 🔊 {c.channel_name}{members}{more}"
+
+    default_idx = 0
+    if st.session_state.get("discord_channel_id"):
+        for i, c in enumerate(chans):
+            if c.channel_id == st.session_state["discord_channel_id"]:
+                default_idx = i
+                break
+
+    sel_idx = st.selectbox(
+        "🔊 Голосовой канал",
+        options=options,
+        index=default_idx,
+        format_func=_fmt,
+    )
+    chosen = chans[sel_idx]
+    st.session_state["discord_channel_id"] = chosen.channel_id
+
+    if chosen.members:
+        st.info(
+            f"⚠️ Сейчас в канале: **{', '.join(chosen.members)}**. "
+            "Бот молча присоединится и начнёт писать. Предупреди людей о записи — "
+            "так делать вежливо и юридически безопасно."
+        )
+    else:
+        st.caption("Канал пуст. Бот может зайти и подождать пока кто-то заговорит.")
+
+    if st.button("🔊 Слушать канал", type="primary"):
+        try:
+            bot.join_and_record(chosen.channel_id, RECORDINGS_DIR)
+            st.toast(f"Подключился к {chosen.channel_name}", icon="🎙")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Не удалось подключиться к каналу: {e}")
 
 
 def render_upload_tab():
@@ -1357,13 +1613,15 @@ def main():
 
     render_sidebar()
 
-    tab_rec, tab_call, tab_upl, tab_hist = st.tabs(
-        ["🎙 Заметка", "📞 Звонок", "📁 Загрузка", "🗂 История"]
+    tab_rec, tab_call, tab_discord, tab_upl, tab_hist = st.tabs(
+        ["🎙 Заметка", "📞 Звонок", "🎮 Discord", "📁 Загрузка", "🗂 История"]
     )
     with tab_rec:
         render_record_tab()
     with tab_call:
         render_call_tab()
+    with tab_discord:
+        render_discord_tab()
     with tab_upl:
         render_upload_tab()
     with tab_hist:
