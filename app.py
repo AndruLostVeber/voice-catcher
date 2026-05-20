@@ -121,7 +121,8 @@ def _load_session_into_state(session_id: str) -> bool:
             )
 
     summary_dict = sess.get("summary", {}) or {}
-    if sess.get("kind") == "call":
+    is_dialog = sess.get("kind") in ("call", "discord")
+    if is_dialog:
         st.session_state["summary"] = None
         st.session_state["transcript"] = None
         st.session_state["dialog_text"] = sess.get("transcript", "")
@@ -1406,13 +1407,14 @@ def render_history_tab():
     total_dur = sum(float(s.get("duration") or 0) for s in sessions)
     kinds = [s.get("kind", "note") for s in sessions]
     n_calls = sum(1 for k in kinds if k == "call")
-    n_notes = len(sessions) - n_calls
+    n_discord = sum(1 for k in kinds if k == "discord")
+    n_notes = len(sessions) - n_calls - n_discord
 
     mcol1, mcol2, mcol3, mcol4, mcol5 = st.columns([1, 1, 1, 1, 1.4])
-    mcol1.metric("Всего сессий", len(sessions))
-    mcol2.metric("Звонков", n_calls)
-    mcol3.metric("Заметок", n_notes)
-    mcol4.metric("Общее время", f"{total_dur / 60:.0f} мин")
+    mcol1.metric("Сессий", len(sessions))
+    mcol2.metric("📞 Звонков", n_calls)
+    mcol3.metric("🎮 Discord", n_discord)
+    mcol4.metric("⏱ Всего", f"{total_dur / 60:.0f} мин")
     with mcol5:
         st.write("")
         st.download_button(
@@ -1574,7 +1576,8 @@ def render_history_tab():
 
     for s in filtered:
         summary = s.get("summary", {})
-        kind_badge = "📞" if s.get("kind") == "call" else "📝"
+        kind = s.get("kind")
+        kind_badge = "🎮" if kind == "discord" else ("📞" if kind == "call" else "📝")
         score_str = ""
         if s.get("id") in score_map:
             score_str = f" · 🧠 {score_map[s['id']]:.2f}"
