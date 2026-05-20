@@ -60,23 +60,34 @@ class CallRecorder:
         )
         self._streams.append(stream)
 
-    def start(self, out_dir: Path) -> tuple[Path, Path]:
+    def start(
+        self,
+        out_dir: Path,
+        loopback_index: int | None = None,
+        mic_index: int | None = None,
+    ) -> tuple[Path, Path]:
         out_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         system_path = out_dir / f"call_{ts}_system.wav"
         mic_path = out_dir / f"call_{ts}_mic.wav"
 
         try:
-            loopback = self._pa.get_default_wasapi_loopback()
+            if loopback_index is not None:
+                loopback = self._pa.get_device_info_by_index(loopback_index)
+            else:
+                loopback = self._pa.get_default_wasapi_loopback()
         except OSError as e:
             raise RuntimeError(
                 "WASAPI loopback не найден. Проверь Default Output в Windows."
             ) from e
 
         try:
-            mic = self._pa.get_default_input_device_info()
+            if mic_index is not None:
+                mic = self._pa.get_device_info_by_index(mic_index)
+            else:
+                mic = self._pa.get_default_input_device_info()
         except OSError as e:
-            raise RuntimeError("Микрофон по умолчанию не найден.") from e
+            raise RuntimeError("Микрофон не найден.") from e
 
         try:
             self._open_stream(loopback, system_path)
@@ -141,9 +152,55 @@ def get_loopback_info() -> dict | None:
             "name": info["name"],
             "channels": int(info.get("maxInputChannels", 0)),
             "rate": int(info["defaultSampleRate"]),
-            "index": info["index"],
+            "index": int(info["index"]),
         }
     except OSError:
         return None
     finally:
         p.terminate()
+
+
+def list_loopback_devices() -> list[dict]:
+    """Все WASAPI-loopback устройства (виртуальные дубликаты output-устройств)."""
+    p = pyaudio.PyAudio()
+    out: list[dict] = []
+    try:
+        for info in p.get_loopback_device_info_generator():
+            out.append(
+                {
+                    "index": int(info["index"]),
+                    "name": str(info["name"]),
+                    "rate": int(info["defaultSampleRate"]),
+                    "channels": int(info.get("maxInputChannels", 0)),
+                }
+            )
+    except Exception:
+        pass
+    finally:
+        p.terminate()
+    return out
+
+
+def list_microphones() -> list[dict]:
+    p = pyaudio.PyAudio()
+    out: list[dict] = []
+    try:
+        for i in range(p.get_device_count()):
+            try:
+                info = p.get_device_info_by_index(i)
+            except OSError:
+                continue
+            if int(info.get("maxInputChannels", 0)) > 0 and "[Loopback]" not in str(info.get("name", "")):
+                out.append(
+                    {
+                        "index": int(info["index"]),
+                        "name": str(info["name"]),
+                        "rate": int(info["defaultSampleRate"]),
+                        "channels": int(info.get("maxInputChannels", 0)),
+                    }
+                )
+    except Exception:
+        pass
+    finally:
+        p.terminate()
+    return out

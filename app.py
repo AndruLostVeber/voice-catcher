@@ -15,7 +15,12 @@ load_dotenv()
 
 from src.analyzer import compute_talk_stats, deep_analyze
 from src.asr import merge_dialog, transcribe
-from src.call_recorder import CallRecorder, get_loopback_info
+from src.call_recorder import (
+    CallRecorder,
+    get_loopback_info,
+    list_loopback_devices,
+    list_microphones,
+)
 from src.exporter import filename_for_session, session_to_markdown
 from src.notify import notify
 from src.recorder import Recorder, list_input_devices
@@ -327,13 +332,43 @@ def render_call_tab():
         "Работает с любым приложением: MAX, Telegram, Zoom, Discord."
     )
 
-    loopback = get_loopback_info()
-    if not loopback:
-        st.error("WASAPI loopback не найден. Убедись, что в Windows выбрано устройство вывода по умолчанию.")
+    loopbacks = list_loopback_devices()
+    mics = list_microphones()
+    default_loopback = get_loopback_info()
+
+    if not loopbacks:
+        st.error("WASAPI loopback устройства не найдены.")
         return
 
+    with st.expander("🎚 Аудиоустройства", expanded=not st.session_state.get("is_in_call")):
+        lb_names = [f"[{d['index']}] {d['name']} · {d['rate']}Hz · {d['channels']}ch" for d in loopbacks]
+        default_lb_idx = 0
+        if default_loopback:
+            for i, d in enumerate(loopbacks):
+                if d["index"] == default_loopback["index"]:
+                    default_lb_idx = i
+                    break
+        lb_choice = st.selectbox(
+            "🔊 Системный звук (через что слышит собеседник)",
+            options=list(range(len(loopbacks))),
+            index=default_lb_idx,
+            format_func=lambda i: lb_names[i],
+            help="Это устройство загружено как Default Output в Windows. Звук, играющий через него, и будет записан.",
+        )
+        st.session_state["chosen_loopback"] = loopbacks[lb_choice]["index"]
+
+        mic_names = [f"[{d['index']}] {d['name']} · {d['rate']}Hz · {d['channels']}ch" for d in mics]
+        mic_choice = st.selectbox(
+            "🎙 Микрофон",
+            options=list(range(len(mics))) if mics else [0],
+            format_func=lambda i: mic_names[i] if mics else "—",
+            help="Запись твоего голоса.",
+        )
+        st.session_state["chosen_mic"] = mics[mic_choice]["index"] if mics else None
+
     st.info(
-        f"🔊 Будет записан системный звук с: **{loopback['name']}**\n\n"
+        f"🔊 Системный звук: **{loopbacks[lb_choice]['name']}** · "
+        f"🎙 Микрофон: **{mics[mic_choice]['name'] if mics else '?'}**\n\n"
         "⚠️ Предупреди собеседника о записи — это требование закона и хороший тон."
     )
 
@@ -343,7 +378,11 @@ def render_call_tab():
             if st.button("📞 Начать запись звонка", type="primary", use_container_width=True):
                 try:
                     cr = CallRecorder()
-                    system_path, mic_path = cr.start(RECORDINGS_DIR)
+                    system_path, mic_path = cr.start(
+                        RECORDINGS_DIR,
+                        loopback_index=st.session_state.get("chosen_loopback"),
+                        mic_index=st.session_state.get("chosen_mic"),
+                    )
                     st.session_state["call_recorder"] = cr
                     st.session_state["call_paths"] = (system_path, mic_path)
                     st.session_state["is_in_call"] = True
