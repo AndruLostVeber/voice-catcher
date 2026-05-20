@@ -593,6 +593,27 @@ def render_result():
         render_note_result()
 
 
+def _session_matches(s: dict, query: str) -> bool:
+    if not query:
+        return True
+    q = query.lower()
+    haystack_parts = [
+        s.get("transcript", "") or "",
+        (s.get("summary", {}) or {}).get("tldr", "") or "",
+    ]
+    summary = s.get("summary", {}) or {}
+    for kp in summary.get("key_points", []) or []:
+        haystack_parts.append(str(kp))
+    for a in summary.get("action_items", []) or []:
+        if isinstance(a, dict):
+            haystack_parts.append(str(a.get("task", "")))
+        else:
+            haystack_parts.append(str(a))
+    for t in summary.get("topics", []) or []:
+        haystack_parts.append(str(t))
+    return q in "\n".join(haystack_parts).lower()
+
+
 def render_history_tab():
     st.subheader("🗂 История сессий")
     sessions = list_sessions()
@@ -600,9 +621,61 @@ def render_history_tab():
         st.caption("Пока пусто. Запиши или загрузи что-нибудь.")
         return
 
-    for s in sessions:
+    total_dur = sum(float(s.get("duration") or 0) for s in sessions)
+    kinds = [s.get("kind", "note") for s in sessions]
+    n_calls = sum(1 for k in kinds if k == "call")
+    n_notes = len(sessions) - n_calls
+
+    mcol1, mcol2, mcol3, mcol4 = st.columns(4)
+    mcol1.metric("Всего сессий", len(sessions))
+    mcol2.metric("Звонков", n_calls)
+    mcol3.metric("Заметок", n_notes)
+    mcol4.metric("Общее время", f"{total_dur / 60:.0f} мин")
+
+    fcol1, fcol2, fcol3 = st.columns([3, 1, 1])
+    with fcol1:
+        query = st.text_input(
+            "🔍 Поиск по транскриптам, ключевым мыслям, темам",
+            placeholder="например: бюджет, встреча, важно...",
+            label_visibility="collapsed",
+        )
+    with fcol2:
+        kind_filter = st.selectbox(
+            "Тип",
+            options=["Все", "Звонки", "Заметки"],
+            label_visibility="collapsed",
+        )
+    with fcol3:
+        sort_by = st.selectbox(
+            "Сортировка",
+            options=["Сначала новые", "Сначала старые", "По длительности"],
+            label_visibility="collapsed",
+        )
+
+    filtered = sessions
+    if kind_filter == "Звонки":
+        filtered = [s for s in filtered if s.get("kind") == "call"]
+    elif kind_filter == "Заметки":
+        filtered = [s for s in filtered if s.get("kind", "note") == "note"]
+    filtered = [s for s in filtered if _session_matches(s, query)]
+
+    if sort_by == "Сначала старые":
+        filtered.sort(key=lambda s: s.get("created_at", ""))
+    elif sort_by == "По длительности":
+        filtered.sort(key=lambda s: float(s.get("duration") or 0), reverse=True)
+    else:
+        filtered.sort(key=lambda s: s.get("created_at", ""), reverse=True)
+
+    if not filtered:
+        st.caption("Ничего не найдено.")
+        return
+
+    st.caption(f"Показано: {len(filtered)} из {len(sessions)}")
+
+    for s in filtered:
         summary = s.get("summary", {})
-        with st.expander(f"📌 {s['created_at']} — {summary.get('tldr', '(без саммари)')[:80]}"):
+        kind_badge = "📞" if s.get("kind") == "call" else "📝"
+        with st.expander(f"{kind_badge} {s['created_at']} — {summary.get('tldr', '(без саммари)')[:80]}"):
             st.caption(f"ID: `{s['id']}` | Длительность: {s.get('duration', 0):.1f}с")
 
             audio_path = s.get("audio_path", "") or ""
