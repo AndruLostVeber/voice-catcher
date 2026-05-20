@@ -63,6 +63,17 @@ def load_session(session_id: str) -> dict | None:
     return data
 
 
+def update_session(session_id: str, updates: dict) -> dict | None:
+    path = SESSIONS_DIR / f"{session_id}.json"
+    if not path.exists():
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data.update(updates)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    data["_path"] = str(path)
+    return data
+
+
 def delete_session(session_id: str) -> bool:
     path = SESSIONS_DIR / f"{session_id}.json"
     if not path.exists():

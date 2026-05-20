@@ -29,7 +29,13 @@ from src.call_recorder import (
 from src.exporter import filename_for_session, session_to_markdown
 from src.notify import notify
 from src.recorder import Recorder, list_input_devices
-from src.storage import delete_session, list_sessions, load_session, save_session
+from src.storage import (
+    delete_session,
+    list_sessions,
+    load_session,
+    save_session,
+    update_session,
+)
 from src.summarizer import summarize, summarize_dialog
 from src.theme import inject as inject_css
 
@@ -142,6 +148,49 @@ def _load_session_into_state(session_id: str) -> bool:
             duration=float(sess.get("duration") or 0),
         )
     return True
+
+
+def _reanalyze_session(session: dict) -> dict | None:
+    """Пересчитать саммари (и глубокий анализ для звонков) текущей моделью.
+    Сохраняет в storage и возвращает обновлённый dict."""
+    transcript_text = session.get("transcript", "") or ""
+    if not transcript_text.strip():
+        st.warning("Транскрипт пустой — нечего переанализировать.")
+        return None
+
+    model = st.session_state.get("llm_model")
+    do_deep = (
+        session.get("kind") == "call"
+        and st.session_state.get("enable_deep_analysis", True)
+    )
+
+    with st.status("Переанализирую...", expanded=True) as status:
+        st.write(f"🧠 LLM: `{model}`")
+        try:
+            with ThreadPoolExecutor(max_workers=2) as ex:
+                if session.get("kind") == "call":
+                    f_sum = ex.submit(summarize_dialog, transcript_text, model)
+                else:
+                    f_sum = ex.submit(summarize, transcript_text, model)
+                f_deep = ex.submit(deep_analyze, transcript_text, model) if do_deep else None
+                new_summary = f_sum.result()
+                new_deep = f_deep.result() if f_deep else None
+        except Exception as e:
+            status.update(label="Ошибка", state="error")
+            st.error(f"Не удалось переанализировать: {e}")
+            return None
+
+        updates = {"summary": new_summary.to_dict()}
+        if new_deep is not None:
+            updates["deep_analysis"] = new_deep.to_dict()
+        updated = update_session(session["id"], updates)
+        status.update(label="Готово", state="complete")
+
+    if updated and st.session_state.get("autosave_markdown", True):
+        _autosave_session(updated)
+    if st.session_state.get("enable_notifications", True):
+        notify("Переанализ готов", new_summary.tldr or "Сессия обновлена")
+    return updated
 
 
 def _open_folder(path: Path) -> bool:
@@ -600,10 +649,10 @@ def render_dialog_result():
     items = st.session_state["dialog_items"]
 
     st.divider()
-    header_col, dl_col = st.columns([3, 1])
+    header_col, btn1_col, btn2_col = st.columns([3, 1, 1])
     with header_col:
         st.subheader("📞 Результат звонка")
-    with dl_col:
+    with btn1_col:
         sess = st.session_state.get("last_session")
         if sess:
             st.download_button(
@@ -613,6 +662,18 @@ def render_dialog_result():
                 mime="text/markdown",
                 use_container_width=True,
             )
+    with btn2_col:
+        if sess and sess.get("id"):
+            if st.button(
+                "🔄 Переанализ",
+                key="reanalyze_dialog",
+                use_container_width=True,
+                help="Пересчитать саммари и анализ текущей моделью",
+            ):
+                upd = _reanalyze_session(sess)
+                if upd and _load_session_into_state(upd["id"]):
+                    st.toast("Сессия переанализирована", icon="✅")
+                    st.rerun()
 
     emoji = SENTIMENT_EMOJI.get(summary.sentiment, "")
     st.info(f"**TL;DR** {emoji}\n\n{summary.tldr}")
@@ -869,10 +930,10 @@ def render_note_result():
     transcript = st.session_state["transcript"]
 
     st.divider()
-    header_col, dl_col = st.columns([3, 1])
+    header_col, btn1_col, btn2_col = st.columns([3, 1, 1])
     with header_col:
         st.subheader("📝 Результат")
-    with dl_col:
+    with btn1_col:
         sess = st.session_state.get("last_session")
         if sess:
             st.download_button(
@@ -882,6 +943,18 @@ def render_note_result():
                 mime="text/markdown",
                 use_container_width=True,
             )
+    with btn2_col:
+        if sess and sess.get("id"):
+            if st.button(
+                "🔄 Переанализ",
+                key="reanalyze_note",
+                use_container_width=True,
+                help="Пересчитать саммари текущей моделью",
+            ):
+                upd = _reanalyze_session(sess)
+                if upd and _load_session_into_state(upd["id"]):
+                    st.toast("Заметка переанализирована", icon="✅")
+                    st.rerun()
 
     emoji = SENTIMENT_EMOJI.get(summary.sentiment, "")
     st.info(f"**TL;DR** {emoji}\n\n{summary.tldr}")
