@@ -463,9 +463,10 @@ def render_record_tab():
                 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
                 out_path = RECORDINGS_DIR / f"rec_{ts}.wav"
                 rec.stop(out_path)
+                duration_rec = rec.duration
                 st.session_state["is_recording"] = False
                 st.session_state["recorder"] = None
-                st.success(f"Запись сохранена: {out_path.name}")
+                st.success(f"Запись сохранена: {out_path.name} · {format_duration(duration_rec)}")
                 process_audio(out_path)
                 st.rerun()
     with col2:
@@ -474,7 +475,7 @@ def render_record_tab():
             st.markdown(
                 f'<div style="display:flex;align-items:center;gap:8px;">'
                 f'<span class="vc-recording-dot"></span>'
-                f'<span style="font-size:1.1rem;font-weight:600;">Идёт запись · {rec.duration:.0f}с</span>'
+                f'<span style="font-size:1.1rem;font-weight:600;">Идёт запись · {format_duration(rec.duration)}</span>'
                 f"</div>",
                 unsafe_allow_html=True,
             )
@@ -558,7 +559,7 @@ def render_call_tab():
                 if cr.errors:
                     for err in cr.errors:
                         st.warning(err)
-                st.success(f"Звонок записан: {duration:.0f}с")
+                st.success(f"Звонок записан: {format_duration(duration)}")
                 process_call(system_path, mic_path, duration)
                 st.rerun()
     with col2:
@@ -567,7 +568,7 @@ def render_call_tab():
             st.markdown(
                 f'<div style="display:flex;align-items:center;gap:8px;">'
                 f'<span class="vc-recording-dot"></span>'
-                f'<span style="font-size:1.1rem;font-weight:600;">В разговоре · {cr.duration:.0f}с</span>'
+                f'<span style="font-size:1.1rem;font-weight:600;">В разговоре · {format_duration(cr.duration)}</span>'
                 f"</div>",
                 unsafe_allow_html=True,
             )
@@ -663,10 +664,10 @@ def render_dialog_result():
         st.divider()
         st.markdown("### 📊 Статистика разговора")
         metric_cols = st.columns(4)
-        metric_cols[0].metric("⏱ Запись", f"{talk_stats.total_audio_seconds:.0f}с")
-        metric_cols[1].metric("🗣 Речь", f"{talk_stats.total_speech_seconds:.0f}с")
-        metric_cols[2].metric("🤫 Тишина", f"{talk_stats.silence_seconds:.0f}с")
-        metric_cols[3].metric("🌀 Перекрытие", f"{talk_stats.overlap_seconds:.0f}с")
+        metric_cols[0].metric("⏱ Запись", format_duration(talk_stats.total_audio_seconds))
+        metric_cols[1].metric("🗣 Речь", format_duration(talk_stats.total_speech_seconds))
+        metric_cols[2].metric("🤫 Тишина", format_duration(talk_stats.silence_seconds))
+        metric_cols[3].metric("🌀 Перекрытие", format_duration(talk_stats.overlap_seconds))
 
         chart_cols = st.columns([1, 1])
         with chart_cols[0]:
@@ -1142,7 +1143,7 @@ def render_history_tab():
         summary = s.get("summary", {})
         kind_badge = "📞" if s.get("kind") == "call" else "📝"
         with st.expander(f"{kind_badge} {s['created_at']} — {summary.get('tldr', '(без саммари)')[:80]}"):
-            st.caption(f"ID: `{s['id']}` | Длительность: {s.get('duration', 0):.1f}с")
+            st.caption(f"ID: `{s['id']}` | Длительность: {format_duration(s.get('duration') or 0)}")
 
             audio_path = s.get("audio_path", "") or ""
             if " + " in audio_path:
