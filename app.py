@@ -14,6 +14,7 @@ from src.analyzer import compute_talk_stats, deep_analyze
 from src.asr import merge_dialog, transcribe
 from src.call_recorder import CallRecorder, get_loopback_info
 from src.exporter import filename_for_session, session_to_markdown
+from src.notify import notify
 from src.recorder import Recorder, list_input_devices
 from src.storage import delete_session, list_sessions, save_session
 from src.summarizer import summarize, summarize_dialog
@@ -38,6 +39,7 @@ def init_state():
     st.session_state.setdefault("talk_stats", None)
     st.session_state.setdefault("deep_analysis", None)
     st.session_state.setdefault("enable_deep_analysis", True)
+    st.session_state.setdefault("enable_notifications", True)
     st.session_state.setdefault("duration", None)
 
 
@@ -77,6 +79,11 @@ def render_sidebar():
         "🔬 Глубокий анализ звонков",
         value=st.session_state.get("enable_deep_analysis", True),
         help="Второй LLM-вызов: стили общения, эмоции, цитаты, рекомендации. Тратит ещё один кредит.",
+    )
+    st.session_state["enable_notifications"] = st.sidebar.toggle(
+        "🔔 Уведомления Windows",
+        value=st.session_state.get("enable_notifications", True),
+        help="Звуковое и системное уведомление, когда обработка завершилась.",
     )
 
     devices = list_input_devices()
@@ -119,6 +126,8 @@ def process_audio(audio_path: Path):
         audio_path=str(audio_path),
         duration=transcript.duration,
     )
+    if st.session_state.get("enable_notifications", True):
+        notify("Заметка готова", summary.tldr or "Транскрипт и саммари готовы")
 
 
 MIN_WAV_BYTES = 1024  # меньше — это пустой header или почти тишина
@@ -227,6 +236,8 @@ def process_call(system_path: Path, mic_path: Path, duration: float):
         deep_analysis=deep.to_dict() if deep else None,
         kind="call",
     )
+    if st.session_state.get("enable_notifications", True):
+        notify("Звонок проанализирован", summary.tldr or "Саммари и анализ готовы")
 
 
 def render_record_tab():
