@@ -26,6 +26,7 @@ from src.call_recorder import (
     list_loopback_devices,
     list_microphones,
 )
+from src.embeddings import cosine_similarity, embed, session_text_for_embedding
 from src.exporter import filename_for_session, session_to_markdown
 from src.notify import notify
 from src.recorder import Recorder, list_input_devices
@@ -994,6 +995,42 @@ def render_result():
         render_note_result()
 
 
+def _get_session_embedding(session: dict) -> "np.ndarray | None":  # type: ignore[name-defined]
+    cache = st.session_state.setdefault("_embed_cache", {})
+    sid = session.get("id")
+    if sid in cache:
+        return cache[sid]
+    text = session_text_for_embedding(session)
+    if not text.strip():
+        cache[sid] = None
+        return None
+    try:
+        vec = embed(text, input_type="passage")
+        cache[sid] = vec
+        return vec
+    except Exception as e:
+        print(f"[embed] {sid}: {e}")
+        cache[sid] = None
+        return None
+
+
+def _semantic_search(sessions: list[dict], query: str, top_k: int = 10) -> list[tuple[float, dict]]:
+    try:
+        qv = embed(query, input_type="query")
+    except Exception as e:
+        st.warning(f"Не удалось получить embedding запроса: {e}")
+        return [(0.0, s) for s in sessions]
+    scored: list[tuple[float, dict]] = []
+    with st.spinner(f"Семантический поиск по {len(sessions)} сессиям..."):
+        for s in sessions:
+            sv = _get_session_embedding(s)
+            if sv is None:
+                continue
+            scored.append((cosine_similarity(qv, sv), s))
+    scored.sort(key=lambda t: t[0], reverse=True)
+    return scored[:top_k]
+
+
 def _session_matches(s: dict, query: str) -> bool:
     if not query:
         return True
@@ -1172,7 +1209,7 @@ def render_history_tab():
             )
             st.altair_chart(hour_chart, use_container_width=True)
 
-    fcol1, fcol2, fcol3 = st.columns([3, 1, 1])
+    fcol1, fcol2, fcol3, fcol4 = st.columns([3, 1, 1, 1])
     with fcol1:
         query = st.text_input(
             "🔍 Поиск по транскриптам, ключевым мыслям, темам",
@@ -1191,20 +1228,33 @@ def render_history_tab():
             options=["Сначала новые", "Сначала старые", "По длительности"],
             label_visibility="collapsed",
         )
+    with fcol4:
+        semantic = st.toggle(
+            "🧠 Семантически",
+            value=False,
+            help="Использовать NVIDIA embeddings для поиска по смыслу, а не подстроке.",
+        )
 
     filtered = sessions
     if kind_filter == "Звонки":
         filtered = [s for s in filtered if s.get("kind") == "call"]
     elif kind_filter == "Заметки":
         filtered = [s for s in filtered if s.get("kind", "note") == "note"]
-    filtered = [s for s in filtered if _session_matches(s, query)]
 
-    if sort_by == "Сначала старые":
-        filtered.sort(key=lambda s: s.get("created_at", ""))
-    elif sort_by == "По длительности":
-        filtered.sort(key=lambda s: float(s.get("duration") or 0), reverse=True)
-    else:
-        filtered.sort(key=lambda s: s.get("created_at", ""), reverse=True)
+    scored: list[tuple[float, dict]] | None = None
+    if query and semantic:
+        scored = _semantic_search(filtered, query, top_k=30)
+        filtered = [s for _, s in scored]
+    elif query:
+        filtered = [s for s in filtered if _session_matches(s, query)]
+
+    if not scored:
+        if sort_by == "Сначала старые":
+            filtered.sort(key=lambda s: s.get("created_at", ""))
+        elif sort_by == "По длительности":
+            filtered.sort(key=lambda s: float(s.get("duration") or 0), reverse=True)
+        else:
+            filtered.sort(key=lambda s: s.get("created_at", ""), reverse=True)
 
     if not filtered:
         st.caption("Ничего не найдено.")
@@ -1212,10 +1262,22 @@ def render_history_tab():
 
     st.caption(f"Показано: {len(filtered)} из {len(sessions)}")
 
+    score_map: dict[str, float] = {}
+    if scored:
+        for sc, s in scored:
+            sid = s.get("id")
+            if sid:
+                score_map[sid] = sc
+
     for s in filtered:
         summary = s.get("summary", {})
         kind_badge = "📞" if s.get("kind") == "call" else "📝"
-        with st.expander(f"{kind_badge} {s['created_at']} — {summary.get('tldr', '(без саммари)')[:80]}"):
+        score_str = ""
+        if s.get("id") in score_map:
+            score_str = f" · 🧠 {score_map[s['id']]:.2f}"
+        with st.expander(
+            f"{kind_badge} {s['created_at']}{score_str} — {summary.get('tldr', '(без саммари)')[:80]}"
+        ):
             st.caption(f"ID: `{s['id']}` | Длительность: {format_duration(s.get('duration') or 0)}")
 
             audio_path = s.get("audio_path", "") or ""
