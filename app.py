@@ -1371,6 +1371,16 @@ def main():
 
     render_result()
 
+    st.divider()
+    st.markdown(
+        '<div style="text-align:center;color:#6B7280;font-size:0.85rem;padding:0.6rem 0;">'
+        '🎙 <b>Voice Notes AI</b> · '
+        'Whisper + NVIDIA NIM · '
+        '<a href="https://github.com/AndruLostVeber/voice-catcher" target="_blank" style="color:#4C9AFF;text-decoration:none;">GitHub</a>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
 
 if __name__ == "__main__":
     main()
