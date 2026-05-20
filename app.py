@@ -49,6 +49,44 @@ EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
 SENTIMENT_EMOJI = {"positive": "😊", "neutral": "😐", "negative": "😟"}
 ROLE_COLORS = {"Я": "🟦", "Собеседник": "🟪"}
 ROLE_PALETTE = {"Я": "#4C9AFF", "Собеседник": "#A78BFA"}
+_BADGE_POOL = ["🟦", "🟪", "🟩", "🟧", "🟥", "🟨", "🟫", "🔷", "🔶", "🔹"]
+_COLOR_POOL = [
+    "#4C9AFF", "#A78BFA", "#34D399", "#F59E0B", "#F87171",
+    "#FBBF24", "#A3E635", "#22D3EE", "#EC4899", "#60A5FA",
+]
+
+
+def role_badge(role: str, palette_index: dict[str, int] | None = None) -> str:
+    if role in ROLE_COLORS:
+        return ROLE_COLORS[role]
+    if palette_index is None:
+        return "⬜"
+    idx = palette_index.get(role, 0)
+    return _BADGE_POOL[idx % len(_BADGE_POOL)]
+
+
+def role_color(role: str, palette_index: dict[str, int] | None = None) -> str:
+    if role in ROLE_PALETTE:
+        return ROLE_PALETTE[role]
+    if palette_index is None:
+        return "#888888"
+    idx = palette_index.get(role, 0)
+    return _COLOR_POOL[idx % len(_COLOR_POOL)]
+
+
+def build_palette(roles: list[str]) -> tuple[dict[str, int], dict[str, str], dict[str, str]]:
+    """Возвращает (role->order_idx, role->badge, role->#hex)."""
+    order: dict[str, int] = {}
+    next_idx = 0
+    for r in roles:
+        if r in ROLE_PALETTE:
+            order[r] = -1
+        else:
+            order[r] = next_idx
+            next_idx += 1
+    badges = {r: role_badge(r, order) for r in roles}
+    colors = {r: role_color(r, order) for r in roles}
+    return order, badges, colors
 
 
 def format_duration(seconds: float | int | None) -> str:
@@ -905,6 +943,18 @@ def render_dialog_result():
     dialog_text = st.session_state["dialog_text"]
     items = st.session_state["dialog_items"]
 
+    talk_stats = st.session_state.get("talk_stats")
+    role_list: list[str] = []
+    if talk_stats:
+        role_list = [sp.role for sp in talk_stats.speakers]
+    elif items:
+        seen = set()
+        for _, r, _ in items:
+            if r not in seen:
+                seen.add(r)
+                role_list.append(r)
+    _, badges, colors = build_palette(role_list)
+
     st.divider()
     header_col, btn1_col, btn2_col = st.columns([3, 1, 1])
     with header_col:
@@ -964,7 +1014,7 @@ def render_dialog_result():
             for a in summary.action_items:
                 who = a.get("who", "?")
                 task = a.get("task", "")
-                badge = "🟦" if who == "Я" else ("🟪" if who == "Собеседник" else "🟨")
+                badge = badges.get(who, role_badge(who))
                 st.markdown(f"- {badge} **{who}:** {task}")
         else:
             st.caption("явных задач не обнаружено")
@@ -987,6 +1037,8 @@ def render_dialog_result():
         metric_cols[2].metric("🤫 Тишина", format_duration(talk_stats.silence_seconds))
         metric_cols[3].metric("🌀 Перекрытие", format_duration(talk_stats.overlap_seconds))
 
+        palette_domain = list(colors.keys())
+        palette_range = [colors[r] for r in palette_domain]
         chart_cols = st.columns([1, 1])
         with chart_cols[0]:
             df_time = pd.DataFrame(
@@ -1000,10 +1052,7 @@ def render_dialog_result():
                         theta=alt.Theta("секунды:Q"),
                         color=alt.Color(
                             "Кто:N",
-                            scale=alt.Scale(
-                                domain=list(ROLE_PALETTE.keys()),
-                                range=list(ROLE_PALETTE.values()),
-                            ),
+                            scale=alt.Scale(domain=palette_domain, range=palette_range),
                             legend=alt.Legend(orient="bottom"),
                         ),
                         tooltip=["Кто", "секунды"],
@@ -1035,10 +1084,7 @@ def render_dialog_result():
                         y=alt.Y("Значение:Q"),
                         color=alt.Color(
                             "Кто:N",
-                            scale=alt.Scale(
-                                domain=list(ROLE_PALETTE.keys()),
-                                range=list(ROLE_PALETTE.values()),
-                            ),
+                            scale=alt.Scale(domain=palette_domain, range=palette_range),
                             legend=None,
                         ),
                         column=alt.Column("Метрика:N", header=alt.Header(title=None)),
@@ -1048,11 +1094,10 @@ def render_dialog_result():
                 )
                 st.altair_chart(bars, use_container_width=False)
 
-        sp_cols = st.columns(len(talk_stats.speakers) or 1)
-        for col, sp in zip(sp_cols, talk_stats.speakers):
-            badge = ROLE_COLORS.get(sp.role, "⬜")
-            with col:
-                st.markdown(f"**{badge} {sp.role}**")
+        sp_cols = st.columns(min(len(talk_stats.speakers), 4) or 1)
+        for i, sp in enumerate(talk_stats.speakers):
+            with sp_cols[i % len(sp_cols)]:
+                st.markdown(f"**{badges.get(sp.role, '⬜')} {sp.role}**")
                 st.markdown(
                     f"- Слов: **{sp.word_count}**\n"
                     f"- Время: **{sp.seconds:.1f}с** ({sp.share * 100:.0f}%)\n"
@@ -1079,10 +1124,11 @@ def render_dialog_result():
                 st.markdown(f"**Баланс:** `{deep.power_balance}`")
 
         if deep.speaker_styles:
-            style_cols = st.columns(len(deep.speaker_styles) or 1)
-            for col, (role, desc) in zip(style_cols, deep.speaker_styles.items()):
-                badge = ROLE_COLORS.get(role, "⬜")
-                with col:
+            styles_list = list(deep.speaker_styles.items())
+            style_cols = st.columns(min(len(styles_list), 4) or 1)
+            for i, (role, desc) in enumerate(styles_list):
+                badge = badges.get(role, role_badge(role))
+                with style_cols[i % len(style_cols)]:
                     st.markdown(f"**🎭 Стиль {badge} {role}**")
                     st.caption(desc)
 
@@ -1090,7 +1136,7 @@ def render_dialog_result():
             st.markdown("**💬 Интересные цитаты**")
             for q in deep.interesting_quotes:
                 role = q.get("role", "?")
-                badge = ROLE_COLORS.get(role, "⬜")
+                badge = badges.get(role, role_badge(role))
                 quote = q.get("quote", "")
                 reason = q.get("reason", "")
                 st.markdown(f"> {badge} **{role}:** «{quote}»  \n*— {reason}*")
@@ -1132,10 +1178,14 @@ def render_dialog_result():
                         "emotion": e.get("emotion", ""),
                     }
                     for e in deep.emotion_timeline
-                    if e.get("role") in ROLE_PALETTE
+                    if e.get("role")
                 ]
             )
             if not df_em.empty:
+                em_roles = sorted(set(df_em["role"].tolist()))
+                _, _, em_colors = build_palette(em_roles)
+                em_domain = list(em_colors.keys())
+                em_range = [em_colors[r] for r in em_domain]
                 line = (
                     alt.Chart(df_em)
                     .mark_line(point=alt.OverlayMarkDef(size=120, filled=True))
@@ -1152,10 +1202,7 @@ def render_dialog_result():
                         ),
                         color=alt.Color(
                             "role:N",
-                            scale=alt.Scale(
-                                domain=list(ROLE_PALETTE.keys()),
-                                range=list(ROLE_PALETTE.values()),
-                            ),
+                            scale=alt.Scale(domain=em_domain, range=em_range),
                             legend=alt.Legend(orient="top", title=None),
                         ),
                         tooltip=["role", "phase", "emotion", "intensity"],
@@ -1166,7 +1213,7 @@ def render_dialog_result():
             with st.expander("Детали"):
                 for e in deep.emotion_timeline:
                     role = e.get("role", "?")
-                    badge = ROLE_COLORS.get(role, "⬜")
+                    badge = badges.get(role, role_badge(role))
                     bar = "█" * int(e.get("intensity", 1) or 1)
                     st.markdown(
                         f"`{e.get('time_marker', '')}` {badge} **{role}** — "
@@ -1175,7 +1222,7 @@ def render_dialog_result():
 
     with st.expander("💬 Диалог (по сегментам)"):
         for start, role, text in items or []:
-            badge = ROLE_COLORS.get(role, "⬜")
+            badge = badges.get(role, role_badge(role))
             st.markdown(f"{badge} `{start:.1f}с` **[{role}]** {text}")
 
     with st.expander("📄 Полный транскрипт"):
